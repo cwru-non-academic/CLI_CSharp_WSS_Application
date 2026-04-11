@@ -1,0 +1,3 @@
+[submodule "SubModules/HFI_WSS_Csharp_Implementation"]
+	path = SubModules/HFI_WSS_Csharp_Implementation
+	url = git@github.com:cwru-non-academic/HFI_WSS_Csharp_Implementation.git
