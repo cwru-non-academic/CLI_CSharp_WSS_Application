@@ -1,6 +1,12 @@
 {
   "maxWSS": 1,
-  "firmware": "H03",
+  "firmware": "J03",
+  "broadcastTarget": "0x8F",
+  "wssTargets": [
+    "0x80",
+    "0x82",
+    "0x83"
+  ],
   "useConfigAmpCurves": false,
   "ampCurves": [
     {

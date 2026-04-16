@@ -20,17 +20,17 @@ internal static class Program
             return 0;
         }
 
+        StimulationOptions? options = null;
+
         try
         {
-            var options = ParseOptions(args);
+            options = ParseOptions(args);
             using var controller = new StimulationController(options);
 
             controller.Initialize();
             Console.WriteLine("HFI WSS stimulation controller ready.");
             Console.WriteLine($"Config: {options.ConfigPath}");
-            var transportLabel = options.TestMode
-                ? "test"
-                : $"serial ({(string.IsNullOrWhiteSpace(options.SerialPort) ? "auto-detect" : options.SerialPort)})";
+            var transportLabel = GetTransportLabel(options);
             Console.WriteLine($"Transport: {transportLabel}");
             Console.WriteLine($"Mode valid: {controller.isModeValid()}, Ready: {controller.Ready()}, Basic API: {controller.BasicSupported}");
             PrintCommandHelp();
@@ -39,9 +39,39 @@ internal static class Program
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Startup failed: {ex.Message}");
+            Console.Error.WriteLine($"Startup failed: {DescribeStartupFailure(ex, options)}");
             return 1;
         }
+    }
+
+    private static string DescribeStartupFailure(Exception ex, StimulationOptions? options)
+    {
+        if (options?.Transport == StimulationTransportKind.Ble &&
+            OperatingSystem.IsLinux() &&
+            ContainsUnsupportedPlatformError(ex))
+        {
+            return "BLE is not available in this Linux build because the app targets net8.0, while InTheHand.BluetoothLE only ships the Linux provider through its net9.0 target. Use serial/test, run a Windows BLE build, or retarget this app and library to net9.0.";
+        }
+
+        return ex.Message;
+    }
+
+    private static bool ContainsUnsupportedPlatformError(Exception ex)
+    {
+        for (Exception? current = ex; current != null; current = current.InnerException)
+        {
+            if (current is PlatformNotSupportedException)
+            {
+                return true;
+            }
+
+            if (current.Message.Contains("Operation is not supported on this platform", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -50,17 +80,37 @@ internal static class Program
     /// </summary>
     private static StimulationOptions ParseOptions(string[] args)
     {
+        var transport = StimulationTransportKind.Serial;
         string? serial = null;
-        bool testMode = false;
+        bool bleAuto = false;
+        string? bleDeviceName = null;
+        string? bleDeviceId = null;
         int maxTries = 5;
         string configPath = GetDefaultConfigPath();
         int tickInterval = 10; // milliseconds
 
         foreach (var arg in args)
         {
-            if (arg.StartsWith("--serial=", StringComparison.OrdinalIgnoreCase))
+            if (arg.StartsWith("--transport=", StringComparison.OrdinalIgnoreCase))
+            {
+                var value = arg[(arg.IndexOf('=') + 1)..];
+                transport = ParseTransport(value);
+            }
+            else if (arg.StartsWith("--serial=", StringComparison.OrdinalIgnoreCase))
             {
                 serial = arg[(arg.IndexOf('=') + 1)..];
+            }
+            else if (arg.Equals("--ble-auto", StringComparison.OrdinalIgnoreCase))
+            {
+                bleAuto = true;
+            }
+            else if (arg.StartsWith("--ble-device-name=", StringComparison.OrdinalIgnoreCase))
+            {
+                bleDeviceName = arg[(arg.IndexOf('=') + 1)..];
+            }
+            else if (arg.StartsWith("--ble-device-id=", StringComparison.OrdinalIgnoreCase))
+            {
+                bleDeviceId = arg[(arg.IndexOf('=') + 1)..];
             }
             else if (arg.StartsWith("--config=", StringComparison.OrdinalIgnoreCase))
             {
@@ -80,10 +130,6 @@ internal static class Program
                 if (int.TryParse(value, out var parsed) && parsed > 0)
                     tickInterval = parsed;
             }
-            else if (arg.Equals("--test", StringComparison.OrdinalIgnoreCase))
-            {
-                testMode = true;
-            }
         }
 
         configPath = Path.GetFullPath(configPath);
@@ -91,13 +137,33 @@ internal static class Program
 
         return new StimulationOptions
         {
+            Transport = transport,
             SerialPort = serial,
-            TestMode = testMode,
+            BleAutoSelect = bleAuto,
+            BleDeviceName = bleDeviceName,
+            BleDeviceId = bleDeviceId,
             MaxSetupTries = maxTries,
             ConfigPath = configPath,
             TickIntervalMs = tickInterval
         };
     }
+
+    private static StimulationTransportKind ParseTransport(string value) => value.ToLowerInvariant() switch
+    {
+        "serial" => StimulationTransportKind.Serial,
+        "ble" => StimulationTransportKind.Ble,
+        "test" => StimulationTransportKind.Test,
+        _ => throw new ArgumentException($"Unsupported transport '{value}'. Expected serial, ble, or test.")
+    };
+
+    private static string GetTransportLabel(StimulationOptions options) => options.Transport switch
+    {
+        StimulationTransportKind.Test => "test",
+        StimulationTransportKind.Ble => options.BleAutoSelect
+            ? "ble (auto-select)"
+            : $"ble ({(string.IsNullOrWhiteSpace(options.BleDeviceId) ? options.BleDeviceName : options.BleDeviceId)})",
+        _ => $"serial ({(string.IsNullOrWhiteSpace(options.SerialPort) ? "auto-detect" : options.SerialPort)})"
+    };
 
     private static string GetDefaultConfigPath()
     {
@@ -254,11 +320,14 @@ internal static class Program
         Console.WriteLine("HFI WSS Stim console");
         Console.WriteLine("Usage: dotnet run -- [options]");
         Console.WriteLine("Options (defaults in parentheses):");
-        Console.WriteLine("  --serial=NAME       Fully qualified serial device (auto-detect; ignored when --test is set).");
+        Console.WriteLine("  --transport=serial|ble|test  Transport selection (serial).");
+        Console.WriteLine("  --serial=NAME       Fully qualified serial device (auto-detect when omitted for serial).");
+        Console.WriteLine("  --ble-auto          Auto-select a compatible BLE device.");
+        Console.WriteLine("  --ble-device-name=NAME  Exact BLE device name.");
+        Console.WriteLine("  --ble-device-id=ID  Explicit BLE device identifier.");
         Console.WriteLine("  --config=PATH       Config directory path (" + GetDefaultConfigPath() + ").");
         Console.WriteLine("  --max-retries=N     Max setup retries (5).");
         Console.WriteLine("  --tick=MS           Tick interval in milliseconds (10).");
-        Console.WriteLine("  --test              Enable simulated transport (off; overrides --serial).");
         Console.WriteLine("  --help              Show this message.");
     }
 
