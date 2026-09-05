@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Linq;
+using Wss.CoreModule;
 
 namespace HFI.Wss;
 
@@ -17,6 +18,20 @@ internal static class Program
         if (args.Any(a => a is "--help" or "-h" or "/?"))
         {
             PrintCliUsage();
+            return 0;
+        }
+
+        if (args.Any(a => a.Equals("--serial-smoke", StringComparison.OrdinalIgnoreCase)))
+        {
+#if WSS_OPTIONS_API
+            using var transport = new SerialPortTransport(new SerialPortTransportOptions
+            {
+                AutoSelectPort = true
+            });
+#else
+            using var transport = new SerialPortTransport();
+#endif
+            Console.WriteLine("Serial transport constructed and disposed.");
             return 0;
         }
 
@@ -259,6 +274,7 @@ internal static class Program
         Console.WriteLine("  --max-retries=N     Max setup retries (5).");
         Console.WriteLine("  --tick=MS           Tick interval in milliseconds (10).");
         Console.WriteLine("  --test              Enable simulated transport (off; overrides --serial).");
+        Console.WriteLine("  --serial-smoke      Construct and dispose the serial transport without connecting.");
         Console.WriteLine("  --help              Show this message.");
     }
 

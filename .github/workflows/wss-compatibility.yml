@@ -1,0 +1,86 @@
+name: WSS Serial compatibility
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: WSSCore release tag
+        required: true
+        default: v0.3.0-rc.3
+        type: string
+
+jobs:
+  compatibility:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Download and validate WSS Serial artifacts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          archive_name="WSS-Serial-${RELEASE_TAG}.zip"
+          artifact_dir="$RUNNER_TEMP/wss/$RELEASE_TAG"
+          archive_path="$RUNNER_TEMP/$archive_name"
+          gh release download "$RELEASE_TAG" --repo cwru-non-academic/WSSCore --pattern "$archive_name" --dir "$RUNNER_TEMP"
+          test -f "$archive_path"
+          mkdir -p "$artifact_dir"
+          unzip -q "$archive_path" -d "$artifact_dir"
+          echo "Extracted WSS artifacts: $artifact_dir"
+          find "$artifact_dir" -maxdepth 1 -type f -print
+          test -d "$artifact_dir"
+          test -f "$artifact_dir/WSS.Transport.Serial.dll"
+          echo "WSS_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+
+      - name: Disable checked-in integration DLLs
+        shell: bash
+        run: |
+          set -euo pipefail
+          integration_dir="SubModules/HFI_WSS_Csharp_Implementation/lib"
+          test -d "$integration_dir"
+          mv "$integration_dir" "${integration_dir}.compat-disabled"
+          test ! -d "$integration_dir"
+
+      - name: Restore with downloaded WSS artifacts
+        shell: bash
+        run: dotnet restore CLI_CSharp_WSS_Application.sln -p:WSS_ARTIFACT_DIR="$WSS_ARTIFACT_DIR"
+
+      - name: Build Release with downloaded WSS artifacts
+        shell: bash
+        run: dotnet build CLI_CSharp_WSS_Application.sln -c Release --no-restore -p:WSS_ARTIFACT_DIR="$WSS_ARTIFACT_DIR"
+
+      - name: Verify Serial assembly provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          extracted="$WSS_ARTIFACT_DIR/WSS.Transport.Serial.dll"
+          output="src/bin/Release/net8.0/WSS.Transport.Serial.dll"
+          test -f "$output"
+          extracted_sha="$(openssl dgst -sha256 "$extracted" | awk '{print $NF}')"
+          output_sha="$(openssl dgst -sha256 "$output" | awk '{print $NF}')"
+          echo "Extracted SHA256: $extracted_sha"
+          echo "Output SHA256:    $output_sha"
+          test "$extracted_sha" = "$output_sha"
+
+      - name: Run CLI compatibility smoke checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          cli="src/bin/Release/net8.0/CLI_CSharp_WSS_Application.dll"
+          dotnet "$cli" --help
+          printf 'exit\n' | dotnet "$cli" --test
+          dotnet "$cli" --serial-smoke
