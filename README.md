@@ -54,6 +54,12 @@ Example simulated startup:
 dotnet run --project src/CLI_CSharp_WSS_Application.csproj -- --test
 ```
 
+Verify that the Serial transport can be loaded and constructed without opening a serial device or requiring hardware:
+
+```bash
+dotnet run --project src/CLI_CSharp_WSS_Application.csproj -- --serial-smoke
+```
+
 ## CLI options
 
 - `--serial=NAME`: explicit serial device; ignored when `--test` is set
@@ -61,6 +67,7 @@ dotnet run --project src/CLI_CSharp_WSS_Application.csproj -- --test
 - `--max-retries=N`: max setup retries before startup fails
 - `--tick=MS`: controller tick interval in milliseconds
 - `--test`: use simulated transport instead of hardware
+- `--serial-smoke`: construct and dispose the Serial transport without connecting to hardware; used for release compatibility testing
 - `--help`: print usage information
 
 ## Config behavior
@@ -92,3 +99,28 @@ The CLI project references the library project directly with a `ProjectReference
 
 - `src/CLI_CSharp_WSS_Application.csproj`
 - `SubModules/HFI_WSS_Csharp_Implementation/src/HFI_WSS_Csharp_Implementation.csproj`
+
+## WSS release compatibility testing
+
+The repository contains `.github/workflows/wss-compatibility.yml` for validating this application against a published WSS release candidate. The workflow is manually triggered with `workflow_dispatch` and accepts a `release_tag`, such as `v0.3.0-rc.4`.
+
+The workflow:
+
+- downloads the exact `WSS-Serial-<TAG>.zip` GitHub Release asset
+- builds the application against the downloaded release instead of the checked-in DLLs
+- runs on Windows, Ubuntu, and macOS
+- verifies the application build and help/CLI loading
+- verifies TestMode startup
+- constructs and disposes the Serial transport through `--serial-smoke`
+
+These non-hardware checks prove release-package compatibility and transport assembly loading. They do not prove communication with physical serial hardware.
+
+For example, trigger the workflow with GitHub CLI using a release candidate tag appropriate for the test:
+
+```bash
+gh workflow run wss-compatibility.yml \
+  --ref main \
+  -f release_tag=v0.3.0-rc.4
+```
+
+Normal local development uses the DLLs tracked under the integration submodule. Compatibility CI sets `WSS_ARTIFACT_DIR` to the DLLs extracted from the selected WSS GitHub Release. The workflow also disables the checked-in integration DLL directory and verifies assembly hashes, preventing the compatibility test from silently validating only the checked-in DLL version.

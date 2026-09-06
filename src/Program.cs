@@ -23,12 +23,15 @@ internal static class Program
 
         if (args.Any(a => a.Equals("--serial-smoke", StringComparison.OrdinalIgnoreCase)))
         {
-            using var transport = new WssTransport.SerialPortTransport(new WssTransport.SerialPortTransportOptions
+            using (var transport = new WssTransport.SerialPortTransport(new WssTransport.SerialPortTransportOptions
             {
                 PortName = OperatingSystem.IsWindows() ? "COM1" : "/dev/ttyWssSmoke",
                 AutoSelectPort = false
-            });
-            Console.WriteLine("Serial transport constructed and disposed.");
+            }))
+            {
+            }
+
+            Console.WriteLine("Serial transport constructed and disposed successfully.");
             return 0;
         }
 
@@ -271,7 +274,7 @@ internal static class Program
         Console.WriteLine("  --max-retries=N     Max setup retries (5).");
         Console.WriteLine("  --tick=MS           Tick interval in milliseconds (10).");
         Console.WriteLine("  --test              Enable simulated transport (off; overrides --serial).");
-        Console.WriteLine("  --serial-smoke      Construct and dispose the serial transport without connecting.");
+        Console.WriteLine("  --serial-smoke      Construct and dispose the serial transport without opening hardware.");
         Console.WriteLine("  --help              Show this message.");
     }
 
