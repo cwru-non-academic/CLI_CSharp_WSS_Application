@@ -6,7 +6,7 @@ on:
       release_tag:
         description: WSSCore release tag
         required: true
-        default: v0.3.0-rc.3
+        default: v0.3.0-rc.4
         type: string
 
 jobs:
@@ -63,18 +63,21 @@ jobs:
         shell: bash
         run: dotnet build CLI_CSharp_WSS_Application.sln -c Release --no-restore -p:WSS_ARTIFACT_DIR="$WSS_ARTIFACT_DIR"
 
-      - name: Verify Serial assembly provenance
+      - name: Verify WSS assembly provenance
         shell: bash
         run: |
           set -euo pipefail
-          extracted="$WSS_ARTIFACT_DIR/WSS.Transport.Serial.dll"
-          output="src/bin/Release/net8.0/WSS.Transport.Serial.dll"
-          test -f "$output"
-          extracted_sha="$(openssl dgst -sha256 "$extracted" | awk '{print $NF}')"
-          output_sha="$(openssl dgst -sha256 "$output" | awk '{print $NF}')"
-          echo "Extracted SHA256: $extracted_sha"
-          echo "Output SHA256:    $output_sha"
-          test "$extracted_sha" = "$output_sha"
+          for assembly in WSS_Core_Interface.dll WSS.Transport.Serial.dll; do
+            extracted="$WSS_ARTIFACT_DIR/$assembly"
+            output="src/bin/Release/net8.0/$assembly"
+            test -f "$extracted"
+            test -f "$output"
+            extracted_sha="$(openssl dgst -sha256 "$extracted" | awk '{print $NF}')"
+            output_sha="$(openssl dgst -sha256 "$output" | awk '{print $NF}')"
+            echo "$assembly extracted SHA256: $extracted_sha"
+            echo "$assembly output SHA256:    $output_sha"
+            test "$extracted_sha" = "$output_sha"
+          done
 
       - name: Run CLI compatibility smoke checks
         shell: bash

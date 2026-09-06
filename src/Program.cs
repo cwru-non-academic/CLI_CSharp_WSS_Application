@@ -1,6 +1,6 @@
 using System.Globalization;
 using System.Linq;
-using Wss.CoreModule;
+using WssTransport = Wss.Transports;
 
 namespace HFI.Wss;
 
@@ -23,14 +23,11 @@ internal static class Program
 
         if (args.Any(a => a.Equals("--serial-smoke", StringComparison.OrdinalIgnoreCase)))
         {
-#if WSS_OPTIONS_API
-            using var transport = new SerialPortTransport(new SerialPortTransportOptions
+            using var transport = new WssTransport.SerialPortTransport(new WssTransport.SerialPortTransportOptions
             {
-                AutoSelectPort = true
+                PortName = OperatingSystem.IsWindows() ? "COM1" : "/dev/ttyWssSmoke",
+                AutoSelectPort = false
             });
-#else
-            using var transport = new SerialPortTransport();
-#endif
             Console.WriteLine("Serial transport constructed and disposed.");
             return 0;
         }
