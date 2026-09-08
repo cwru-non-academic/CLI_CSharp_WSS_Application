@@ -52,10 +52,7 @@ internal static class Program
 
             Console.WriteLine("WSS C# stimulation controller ready.");
             Console.WriteLine($"Config: {options.ConfigPath}");
-            var transportLabel = options.TestMode
-                ? "test"
-                : $"serial ({(string.IsNullOrWhiteSpace(options.SerialPort) ? "auto-detect" : options.SerialPort)})";
-            Console.WriteLine($"Transport: {transportLabel}");
+            Console.WriteLine($"Transport: {GetTransportLabel(options)}");
             Console.WriteLine($"Mode valid: {controller.isModeValid()}, Ready: {controller.Ready()}, Basic API: {controller.BasicSupported}");
             PrintCommandHelp();
             RunInteractiveLoop(controller);
@@ -79,18 +76,36 @@ internal static class Program
     /// </summary>
     private static (StimulationOptions Options, string? ConformanceConfigPath) ParseOptions(string[] args)
     {
+        var transport = StimulationTransportKind.Serial;
         string? serial = null;
-        bool testMode = false;
-        bool conformanceMode = false;
+        bool bleAuto = false;
+        string? bleDeviceName = null;
+        string? bleDeviceId = null;
         int maxTries = 5;
         string configPath = GetDefaultConfigPath();
         int tickInterval = 10; // milliseconds
 
         foreach (var arg in args)
         {
-            if (arg.StartsWith("--serial=", StringComparison.OrdinalIgnoreCase))
+            if (arg.StartsWith("--transport=", StringComparison.OrdinalIgnoreCase))
+            {
+                transport = ParseTransport(arg[(arg.IndexOf('=') + 1)..]);
+            }
+            else if (arg.StartsWith("--serial=", StringComparison.OrdinalIgnoreCase))
             {
                 serial = arg[(arg.IndexOf('=') + 1)..];
+            }
+            else if (arg.Equals("--ble-auto", StringComparison.OrdinalIgnoreCase))
+            {
+                bleAuto = true;
+            }
+            else if (arg.StartsWith("--ble-device-name=", StringComparison.OrdinalIgnoreCase))
+            {
+                bleDeviceName = arg[(arg.IndexOf('=') + 1)..];
+            }
+            else if (arg.StartsWith("--ble-device-id=", StringComparison.OrdinalIgnoreCase))
+            {
+                bleDeviceId = arg[(arg.IndexOf('=') + 1)..];
             }
             else if (arg.StartsWith("--config=", StringComparison.OrdinalIgnoreCase))
             {
@@ -110,18 +125,19 @@ internal static class Program
                 if (int.TryParse(value, out var parsed) && parsed > 0)
                     tickInterval = parsed;
             }
-            else if (arg.Equals("--test", StringComparison.OrdinalIgnoreCase) ||
-                     arg.Equals("--transport=test", StringComparison.OrdinalIgnoreCase))
+            else if (arg.Equals("--test", StringComparison.OrdinalIgnoreCase))
             {
-                testMode = true;
+                transport = StimulationTransportKind.Test;
             }
             else if (arg.Equals("--conformance", StringComparison.OrdinalIgnoreCase))
             {
-                conformanceMode = true;
+                transport = StimulationTransportKind.Conformance;
             }
         }
 
-        string? conformanceConfigPath = conformanceMode ? CreateConformanceConfigDirectory() : null;
+        string? conformanceConfigPath = transport == StimulationTransportKind.Conformance
+            ? CreateConformanceConfigDirectory()
+            : null;
         if (conformanceConfigPath != null)
             configPath = conformanceConfigPath;
 
@@ -131,15 +147,37 @@ internal static class Program
         return (
             new StimulationOptions
             {
+                Transport = transport,
                 SerialPort = serial,
-                TestMode = testMode,
-                EmulatedConformanceMode = conformanceMode,
+                BleAutoSelect = bleAuto,
+                BleDeviceName = bleDeviceName,
+                BleDeviceId = bleDeviceId,
                 MaxSetupTries = maxTries,
                 ConfigPath = configPath,
                 TickIntervalMs = tickInterval
             },
             conformanceConfigPath);
     }
+
+    private static StimulationTransportKind ParseTransport(string value) => value.ToLowerInvariant() switch
+    {
+        "serial" => StimulationTransportKind.Serial,
+        "ble" => StimulationTransportKind.Ble,
+        "test" => StimulationTransportKind.Test,
+        "conformance" => StimulationTransportKind.Conformance,
+        _ => throw new ArgumentException(
+            $"Unsupported transport '{value}'. Expected serial, ble, test, or conformance.")
+    };
+
+    private static string GetTransportLabel(StimulationOptions options) => options.Transport switch
+    {
+        StimulationTransportKind.Test => "test",
+        StimulationTransportKind.Conformance => "conformance",
+        StimulationTransportKind.Ble => options.BleAutoSelect
+            ? "ble (auto-select)"
+            : $"ble ({(string.IsNullOrWhiteSpace(options.BleDeviceId) ? options.BleDeviceName : options.BleDeviceId)})",
+        _ => $"serial ({(string.IsNullOrWhiteSpace(options.SerialPort) ? "auto-detect" : options.SerialPort)})"
+    };
 
     private static string CreateConformanceConfigDirectory()
     {
@@ -440,13 +478,16 @@ internal static class Program
         Console.WriteLine("WSS C# stimulation console");
         Console.WriteLine("Usage: dotnet run -- [options]");
         Console.WriteLine("Options (defaults in parentheses):");
-        Console.WriteLine("  --serial=NAME       Fully qualified serial device (auto-detect; ignored when --test is set).");
+        Console.WriteLine("  --transport=serial|ble|test|conformance  Transport selection (serial).");
+        Console.WriteLine("  --serial=NAME       Fully qualified serial device (auto-detect for serial).");
+        Console.WriteLine("  --ble-auto          Auto-select a compatible BLE device.");
+        Console.WriteLine("  --ble-device-name=NAME  Exact BLE device name.");
+        Console.WriteLine("  --ble-device-id=ID  Explicit BLE device identifier.");
         Console.WriteLine("  --config=PATH       Config directory path (" + GetDefaultConfigPath() + ").");
         Console.WriteLine("  --max-retries=N     Max setup retries (5).");
         Console.WriteLine("  --tick=MS           Tick interval in milliseconds (10).");
-        Console.WriteLine("  --test              Enable simulated transport (off; overrides --serial).");
-        Console.WriteLine("  --transport=test    Alias for --test.");
-        Console.WriteLine("  --conformance       Run deterministic WSS RC compatibility checks without hardware.");
+        Console.WriteLine("  --test              Alias for --transport=test.");
+        Console.WriteLine("  --conformance       Alias for --transport=conformance and run deterministic checks.");
         Console.WriteLine("  --serial-smoke      Construct and dispose the serial transport without opening hardware.");
         Console.WriteLine("  --help              Show this message.");
     }

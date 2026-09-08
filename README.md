@@ -38,6 +38,8 @@ git submodule update --init --recursive --remote
 
 ## Build
 
+Install the .NET 9 SDK, which is required by the library's cross-platform BLE transport.
+
 ```bash
 dotnet build CLI_CSharp_WSS_Application.sln
 ```
@@ -54,7 +56,7 @@ Example simulated startup:
 dotnet run --project src/CLI_CSharp_WSS_Application.csproj -- --test
 ```
 
-`--transport=test` is an alias for `--test`.
+`--test` is an alias for `--transport=test`.
 
 Run the deterministic, hardware-independent consumer conformance check:
 
@@ -68,15 +70,24 @@ Verify that the Serial transport can be loaded and constructed without opening a
 dotnet run --project src/CLI_CSharp_WSS_Application.csproj -- --serial-smoke
 ```
 
+Connect using a Nordic UART Service-compatible BLE device by name, identifier, or auto-selection:
+
+```bash
+dotnet run --project src/CLI_CSharp_WSS_Application.csproj -- --transport=ble --ble-auto
+```
+
 ## CLI options
 
-- `--serial=NAME`: explicit serial device; ignored when `--test` is set
+- `--transport=serial|ble|test|conformance`: select exactly one transport; defaults to Serial
+- `--serial=NAME`: explicit serial device used by the Serial transport
+- `--ble-auto`: scan for and auto-select a compatible BLE device
+- `--ble-device-name=NAME`: select an exact BLE device name
+- `--ble-device-id=ID`: select an explicit BLE device identifier
 - `--config=PATH`: override the config directory
 - `--max-retries=N`: max setup retries before startup fails
 - `--tick=MS`: controller tick interval in milliseconds
-- `--test`: use simulated transport instead of hardware
-- `--transport=test`: alias for `--test`
-- `--conformance`: initialize the C# implementation with the WSS emulator and validate initialization plus one direct analog scenario
+- `--test`: alias for `--transport=test`
+- `--conformance`: alias for `--transport=conformance`; initialize the WSS emulator and validate initialization plus one direct analog scenario
 - `--serial-smoke`: construct and dispose the Serial transport without connecting to hardware; used for release compatibility testing
 - `--help`: print usage information
 
@@ -121,7 +132,7 @@ The workflow:
 - builds the application against the downloaded release instead of the checked-in DLLs
 - runs on Windows, Ubuntu, and macOS
 - verifies the application build and help/CLI loading
-- verifies TestMode startup through `--test` and `--transport=test`
+- verifies Test transport startup through `--test` and `--transport=test`
 - constructs and disposes the Serial transport through `--serial-smoke`
 - runs the deterministic CLI conformance path on Ubuntu and checks its process exit code and PASS markers
 

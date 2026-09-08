@@ -21,7 +21,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 9.0.x
 
       - name: Download and validate WSS Serial artifacts
         shell: bash
@@ -50,7 +50,6 @@ jobs:
           test -d "$artifact_dir"
           for assembly in \
             WSS_Core_Interface.dll \
-            WSS.Transport.Serial.dll \
             Newtonsoft.Json.dll \
             System.Buffers.dll \
             System.Memory.dll \
@@ -65,14 +64,16 @@ jobs:
           echo "WSS_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
           echo "Verified $WSS_ARCHIVE_NAME SHA256: $actual_sha"
 
-      - name: Disable checked-in integration DLLs
+      - name: Disable checked-in Core DLL
         shell: bash
         run: |
           set -euo pipefail
           integration_dir="SubModules/HFI_WSS_Csharp_Implementation/lib"
           test -d "$integration_dir"
-          mv "$integration_dir" "${integration_dir}.compat-disabled"
-          test ! -d "$integration_dir"
+          mkdir -p "${integration_dir}.compat-disabled"
+          mv "$integration_dir/WSS_Core_Interface.dll" "${integration_dir}.compat-disabled/"
+          test ! -f "$integration_dir/WSS_Core_Interface.dll"
+          test -f "$integration_dir/WSS.Transport.BLE.dll"
 
       - name: Restore with downloaded WSS artifacts
         shell: bash
@@ -80,15 +81,15 @@ jobs:
 
       - name: Build Release with downloaded WSS artifacts
         shell: bash
-        run: dotnet build CLI_CSharp_WSS_Application.sln -c Release --no-restore -p:WSS_ARTIFACT_DIR="$WSS_ARTIFACT_DIR"
+        run: dotnet build CLI_CSharp_WSS_Application.sln -c Release --no-restore -p:TreatWarningsAsErrors=true -p:WSS_ARTIFACT_DIR="$WSS_ARTIFACT_DIR"
 
       - name: Verify WSS assembly provenance
         shell: bash
         run: |
           set -euo pipefail
-          for assembly in WSS_Core_Interface.dll WSS.Transport.Serial.dll; do
+          for assembly in WSS_Core_Interface.dll; do
             extracted="$WSS_ARTIFACT_DIR/$assembly"
-            output="src/bin/Release/net8.0/$assembly"
+            output="src/bin/Release/net9.0/$assembly"
             test -f "$extracted"
             test -f "$output"
             extracted_sha="$(openssl dgst -sha256 "$extracted" | awk '{print $NF}')"
@@ -97,12 +98,19 @@ jobs:
             echo "$assembly output SHA256:    $output_sha"
             test "$extracted_sha" = "$output_sha"
           done
+          ble_source="SubModules/HFI_WSS_Csharp_Implementation/lib/WSS.Transport.BLE.dll"
+          ble_output="src/bin/Release/net9.0/WSS.Transport.BLE.dll"
+          source_sha="$(openssl dgst -sha256 "$ble_source" | awk '{print $NF}')"
+          output_sha="$(openssl dgst -sha256 "$ble_output" | awk '{print $NF}')"
+          echo "WSS.Transport.BLE.dll source SHA256: $source_sha"
+          echo "WSS.Transport.BLE.dll output SHA256: $output_sha"
+          test "$source_sha" = "$output_sha"
 
       - name: Run CLI compatibility smoke checks
         shell: bash
         run: |
           set -euo pipefail
-          cli="src/bin/Release/net8.0/CLI_CSharp_WSS_Application.dll"
+          cli="src/bin/Release/net9.0/CLI_CSharp_WSS_Application.dll"
           dotnet "$cli" --help
           printf 'exit\n' | dotnet "$cli" --test
           printf 'exit\n' | dotnet "$cli" --transport=test
@@ -113,7 +121,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cli="src/bin/Release/net8.0/CLI_CSharp_WSS_Application.dll"
+          cli="src/bin/Release/net9.0/CLI_CSharp_WSS_Application.dll"
           output="$RUNNER_TEMP/wss-cli-conformance.txt"
           dotnet "$cli" --conformance | tee "$output"
           grep -Fx "Initialization: PASS" "$output"
