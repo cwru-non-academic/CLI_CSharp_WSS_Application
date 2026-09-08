@@ -1,13 +1,13 @@
 # CLI_CSharp_WSS_Application
 
-`CLI_CSharp_WSS_Application` is the standalone .NET CLI host for the HFI WSS stimulation stack.
+`CLI_CSharp_WSS_Application` is the standalone .NET CLI host for the WSS C# stimulation implementation.
 
 This repo owns:
 - the CLI entrypoint and REPL
 - the runtime `Config/` directory
 - build and run instructions for the application
 
-The integration library lives in the `HFI_WSS_Csharp_Implementation` git submodule. Reusable controller code and library-owned DLL/vendor dependencies stay there.
+The integration library lives in the `HFI_WSS_Csharp_Implementation` git submodule. Reusable C# implementation code and library-owned DLL/vendor dependencies stay there.
 
 ## Repository layout
 
@@ -98,7 +98,7 @@ Library submodule responsibilities:
 The CLI project references the library project directly with a `ProjectReference`:
 
 - `src/CLI_CSharp_WSS_Application.csproj`
-- `SubModules/HFI_WSS_Csharp_Implementation/src/HFI_WSS_Csharp_Implementation.csproj`
+- `SubModules/HFI_WSS_Csharp_Implementation/src/Wss.CSharpImplementation.csproj`
 
 ## WSS release compatibility testing
 

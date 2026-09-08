@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Linq;
 using WssTransport = Wss.Transports;
 
-namespace HFI.Wss;
+namespace Wss.CSharpImplementation;
 
 /// <summary>
 /// Console bootstrap that wires the stimulation controller to simple CLI arguments.
@@ -41,7 +41,7 @@ internal static class Program
             using var controller = new StimulationController(options);
 
             controller.Initialize();
-            Console.WriteLine("HFI WSS stimulation controller ready.");
+            Console.WriteLine("WSS C# stimulation controller ready.");
             Console.WriteLine($"Config: {options.ConfigPath}");
             var transportLabel = options.TestMode
                 ? "test"
@@ -266,7 +266,7 @@ internal static class Program
     /// <summary>Prints command-line options along with their defaults.</summary>
     private static void PrintCliUsage()
     {
-        Console.WriteLine("HFI WSS Stim console");
+        Console.WriteLine("WSS C# stimulation console");
         Console.WriteLine("Usage: dotnet run -- [options]");
         Console.WriteLine("Options (defaults in parentheses):");
         Console.WriteLine("  --serial=NAME       Fully qualified serial device (auto-detect; ignored when --test is set).");
