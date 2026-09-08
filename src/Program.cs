@@ -1,8 +1,10 @@
 using System.Globalization;
 using System.Linq;
+using System.Text.Json;
+using Wss.Testing;
 using WssTransport = Wss.Transports;
 
-namespace HFI.Wss;
+namespace Wss.CSharpImplementation;
 
 /// <summary>
 /// Console bootstrap that wires the stimulation controller to simple CLI arguments.
@@ -10,10 +12,13 @@ namespace HFI.Wss;
 /// </summary>
 internal static class Program
 {
+    private const int InitializationPollLimit = 3000;
+    private const int StimulationPollLimit = 2000;
+
     /// <summary>
     /// Entry point: parse args, start the controller, and run the interactive REPL.
     /// </summary>
-    private static int Main(string[] args)
+    private static async Task<int> Main(string[] args)
     {
         if (args.Any(a => a is "--help" or "-h" or "/?"))
         {
@@ -35,18 +40,19 @@ internal static class Program
             return 0;
         }
 
+        string? conformanceConfigPath = null;
         try
         {
-            var options = ParseOptions(args);
+            (StimulationOptions options, conformanceConfigPath) = ParseOptions(args);
             using var controller = new StimulationController(options);
 
             controller.Initialize();
-            Console.WriteLine("HFI WSS stimulation controller ready.");
+            if (conformanceConfigPath != null)
+                return await RunConformanceAsync(controller);
+
+            Console.WriteLine("WSS C# stimulation controller ready.");
             Console.WriteLine($"Config: {options.ConfigPath}");
-            var transportLabel = options.TestMode
-                ? "test"
-                : $"serial ({(string.IsNullOrWhiteSpace(options.SerialPort) ? "auto-detect" : options.SerialPort)})";
-            Console.WriteLine($"Transport: {transportLabel}");
+            Console.WriteLine($"Transport: {GetTransportLabel(options)}");
             Console.WriteLine($"Mode valid: {controller.isModeValid()}, Ready: {controller.Ready()}, Basic API: {controller.BasicSupported}");
             PrintCommandHelp();
             RunInteractiveLoop(controller);
@@ -57,25 +63,49 @@ internal static class Program
             Console.Error.WriteLine($"Startup failed: {ex.Message}");
             return 1;
         }
+        finally
+        {
+            if (conformanceConfigPath != null && Directory.Exists(conformanceConfigPath))
+                Directory.Delete(conformanceConfigPath, recursive: true);
+        }
     }
 
     /// <summary>
     /// Translates CLI switches into strong typed options.
     /// Defaults: test mode OFF, auto-serial, Config folder in current working dir, 5 retries, 10 ms tick.
     /// </summary>
-    private static StimulationOptions ParseOptions(string[] args)
+    private static (StimulationOptions Options, string? ConformanceConfigPath) ParseOptions(string[] args)
     {
+        var transport = StimulationTransportKind.Serial;
         string? serial = null;
-        bool testMode = false;
+        bool bleAuto = false;
+        string? bleDeviceName = null;
+        string? bleDeviceId = null;
         int maxTries = 5;
         string configPath = GetDefaultConfigPath();
         int tickInterval = 10; // milliseconds
 
         foreach (var arg in args)
         {
-            if (arg.StartsWith("--serial=", StringComparison.OrdinalIgnoreCase))
+            if (arg.StartsWith("--transport=", StringComparison.OrdinalIgnoreCase))
+            {
+                transport = ParseTransport(arg[(arg.IndexOf('=') + 1)..]);
+            }
+            else if (arg.StartsWith("--serial=", StringComparison.OrdinalIgnoreCase))
             {
                 serial = arg[(arg.IndexOf('=') + 1)..];
+            }
+            else if (arg.Equals("--ble-auto", StringComparison.OrdinalIgnoreCase))
+            {
+                bleAuto = true;
+            }
+            else if (arg.StartsWith("--ble-device-name=", StringComparison.OrdinalIgnoreCase))
+            {
+                bleDeviceName = arg[(arg.IndexOf('=') + 1)..];
+            }
+            else if (arg.StartsWith("--ble-device-id=", StringComparison.OrdinalIgnoreCase))
+            {
+                bleDeviceId = arg[(arg.IndexOf('=') + 1)..];
             }
             else if (arg.StartsWith("--config=", StringComparison.OrdinalIgnoreCase))
             {
@@ -97,22 +127,201 @@ internal static class Program
             }
             else if (arg.Equals("--test", StringComparison.OrdinalIgnoreCase))
             {
-                testMode = true;
+                transport = StimulationTransportKind.Test;
+            }
+            else if (arg.Equals("--conformance", StringComparison.OrdinalIgnoreCase))
+            {
+                transport = StimulationTransportKind.Conformance;
             }
         }
+
+        string? conformanceConfigPath = transport == StimulationTransportKind.Conformance
+            ? CreateConformanceConfigDirectory()
+            : null;
+        if (conformanceConfigPath != null)
+            configPath = conformanceConfigPath;
 
         configPath = Path.GetFullPath(configPath);
         Directory.CreateDirectory(configPath);
 
-        return new StimulationOptions
-        {
-            SerialPort = serial,
-            TestMode = testMode,
-            MaxSetupTries = maxTries,
-            ConfigPath = configPath,
-            TickIntervalMs = tickInterval
-        };
+        return (
+            new StimulationOptions
+            {
+                Transport = transport,
+                SerialPort = serial,
+                BleAutoSelect = bleAuto,
+                BleDeviceName = bleDeviceName,
+                BleDeviceId = bleDeviceId,
+                MaxSetupTries = maxTries,
+                ConfigPath = configPath,
+                TickIntervalMs = tickInterval
+            },
+            conformanceConfigPath);
     }
+
+    private static StimulationTransportKind ParseTransport(string value) => value.ToLowerInvariant() switch
+    {
+        "serial" => StimulationTransportKind.Serial,
+        "ble" => StimulationTransportKind.Ble,
+        "test" => StimulationTransportKind.Test,
+        "conformance" => StimulationTransportKind.Conformance,
+        _ => throw new ArgumentException(
+            $"Unsupported transport '{value}'. Expected serial, ble, test, or conformance.")
+    };
+
+    private static string GetTransportLabel(StimulationOptions options) => options.Transport switch
+    {
+        StimulationTransportKind.Test => "test",
+        StimulationTransportKind.Conformance => "conformance",
+        StimulationTransportKind.Ble => options.BleAutoSelect
+            ? "ble (auto-select)"
+            : $"ble ({(string.IsNullOrWhiteSpace(options.BleDeviceId) ? options.BleDeviceName : options.BleDeviceId)})",
+        _ => $"serial ({(string.IsNullOrWhiteSpace(options.SerialPort) ? "auto-detect" : options.SerialPort)})"
+    };
+
+    private static string CreateConformanceConfigDirectory()
+    {
+        WssStimulationFixtureProfile fixture = WssBehaviorScenarios.StimulationFixture;
+        string channel = WssBehaviorScenarios.DirectAnalog.Channel.ToString(CultureInfo.InvariantCulture);
+        string directory = Path.Combine(Path.GetTempPath(), $"wss-cli-conformance-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            var stimulationConfig = new
+            {
+                maxWSS = 1,
+                firmware = "J03",
+                broadcastTarget = "0x8F",
+                wssTargets = new[] { "0x81", "0x82", "0x83" },
+                useConfigAmpCurves = true,
+                ampCurves = new[]
+                {
+                    new
+                    {
+                        LowThreshold = fixture.CurveLowThreshold,
+                        LowConst = fixture.CurveLowConstant,
+                        ExpPower = fixture.CurveExponent,
+                        LinearOffset = fixture.CurveLinearOffset,
+                        LinearSlope = fixture.CurveLinearSlope
+                    }
+                }
+            };
+            var stimulationParameters = new
+            {
+                stim = new
+                {
+                    ch = new Dictionary<string, object>
+                    {
+                        [channel] = new
+                        {
+                            ampMode = fixture.AmplitudeMode,
+                            minPW = fixture.MinimumPulseWidth,
+                            maxPW = fixture.MaximumPulseWidth,
+                            minPA = 0.0,
+                            maxPA = 0.0,
+                            defaultPA = fixture.DefaultAmplitudeMa,
+                            defaultPW = 50,
+                            IPI = fixture.InterPulseInterval
+                        }
+                    }
+                }
+            };
+
+            File.WriteAllText(
+                Path.Combine(directory, "stimConfig.json"),
+                JsonSerializer.Serialize(stimulationConfig));
+            File.WriteAllText(
+                Path.Combine(directory, "stimParams.json"),
+                JsonSerializer.Serialize(stimulationParameters));
+            return directory;
+        }
+        catch
+        {
+            Directory.Delete(directory, recursive: true);
+            throw;
+        }
+    }
+
+    private static async Task<int> RunConformanceAsync(StimulationController controller)
+    {
+        Console.WriteLine("WSS conformance:");
+        if (!controller.TryGetConformance(out IWssConformance conformance))
+            return ReportConformanceFailure("Initialization", "The C# implementation did not expose IWssConformance.");
+
+        WssInitializationScenario initializationScenario = WssBehaviorScenarios.Initialization;
+        bool operationalStateObserved = false;
+        bool streamObserved = false;
+        for (int i = 0; i < InitializationPollLimit; i++)
+        {
+            operationalStateObserved = operationalStateObserved || controller.Started();
+            streamObserved = streamObserved || conformance.StimulationHistory.Count > 0;
+            if ((!initializationScenario.RequiresOperationalState || operationalStateObserved) &&
+                (!initializationScenario.RequiresStreamObservation || streamObserved))
+            {
+                break;
+            }
+
+            await Task.Delay(1);
+        }
+
+        if (initializationScenario.RequiresOperationalState && !operationalStateObserved)
+            return ReportConformanceFailure("Initialization", "Core did not reach operational state within the finite poll limit.");
+        if (initializationScenario.RequiresStreamObservation && !streamObserved)
+            return ReportConformanceFailure("Initialization", "Core did not emit a startup stream within the finite poll limit.");
+
+        InitializationConformanceResult initialization = conformance.ValidateInitialization();
+        if (!initialization.Passed)
+            return ReportConformanceFailure("Initialization", initialization.Failures);
+
+        Console.WriteLine("Initialization: PASS");
+
+        WssAnalogStimulationScenario scenario = WssBehaviorScenarios.DirectAnalog;
+        WssStimulationBaseline baseline = conformance.CaptureStimulationBaseline();
+        int amplitude = checked((int)scenario.AmplitudeMa);
+        if (amplitude != scenario.AmplitudeMa)
+            return ReportConformanceFailure("Direct analog", "The shared amplitude is not supported by the integer CLI API.");
+
+        controller.StimulateAnalog(
+            $"ch{scenario.Channel.ToString(CultureInfo.InvariantCulture)}",
+            scenario.PulseWidth,
+            amplitude,
+            scenario.InterPulseInterval);
+
+        bool stimulationObserved = false;
+        for (int i = 0; i < StimulationPollLimit; i++)
+        {
+            stimulationObserved = conformance.StimulationHistory.Any(
+                observation => observation.SequenceNumber > baseline.SequenceNumber);
+            if (stimulationObserved)
+                break;
+
+            await Task.Delay(1);
+        }
+
+        if (!stimulationObserved)
+            return ReportConformanceFailure("Direct analog", "No new stimulation observation arrived within the finite poll limit.");
+
+        StimulationConformanceResult stimulation = conformance.ValidateStimulation(scenario.Expectation, baseline);
+        if (!stimulation.Passed)
+            return ReportConformanceFailure("Direct analog", stimulation.Failures);
+
+        Console.WriteLine("Direct analog: PASS");
+        Console.WriteLine("Result: PASS");
+        return 0;
+    }
+
+    private static int ReportConformanceFailure(string check, IEnumerable<string> failures)
+    {
+        Console.Error.WriteLine($"{check}: FAIL");
+        foreach (string failure in failures)
+            Console.Error.WriteLine(failure);
+        Console.Error.WriteLine("Result: FAIL");
+        return 1;
+    }
+
+    private static int ReportConformanceFailure(string check, string failure) =>
+        ReportConformanceFailure(check, new[] { failure });
 
     private static string GetDefaultConfigPath()
     {
@@ -266,14 +475,19 @@ internal static class Program
     /// <summary>Prints command-line options along with their defaults.</summary>
     private static void PrintCliUsage()
     {
-        Console.WriteLine("HFI WSS Stim console");
+        Console.WriteLine("WSS C# stimulation console");
         Console.WriteLine("Usage: dotnet run -- [options]");
         Console.WriteLine("Options (defaults in parentheses):");
-        Console.WriteLine("  --serial=NAME       Fully qualified serial device (auto-detect; ignored when --test is set).");
+        Console.WriteLine("  --transport=serial|ble|test|conformance  Transport selection (serial).");
+        Console.WriteLine("  --serial=NAME       Fully qualified serial device (auto-detect for serial).");
+        Console.WriteLine("  --ble-auto          Auto-select a compatible BLE device.");
+        Console.WriteLine("  --ble-device-name=NAME  Exact BLE device name.");
+        Console.WriteLine("  --ble-device-id=ID  Explicit BLE device identifier.");
         Console.WriteLine("  --config=PATH       Config directory path (" + GetDefaultConfigPath() + ").");
         Console.WriteLine("  --max-retries=N     Max setup retries (5).");
         Console.WriteLine("  --tick=MS           Tick interval in milliseconds (10).");
-        Console.WriteLine("  --test              Enable simulated transport (off; overrides --serial).");
+        Console.WriteLine("  --test              Alias for --transport=test.");
+        Console.WriteLine("  --conformance       Alias for --transport=conformance and run deterministic checks.");
         Console.WriteLine("  --serial-smoke      Construct and dispose the serial transport without opening hardware.");
         Console.WriteLine("  --help              Show this message.");
     }
