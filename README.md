@@ -54,6 +54,14 @@ Example simulated startup:
 dotnet run --project src/CLI_CSharp_WSS_Application.csproj -- --test
 ```
 
+`--transport=test` is an alias for `--test`.
+
+Run the deterministic, hardware-independent consumer conformance check:
+
+```bash
+dotnet run --project src/CLI_CSharp_WSS_Application.csproj -- --conformance
+```
+
 Verify that the Serial transport can be loaded and constructed without opening a serial device or requiring hardware:
 
 ```bash
@@ -67,12 +75,14 @@ dotnet run --project src/CLI_CSharp_WSS_Application.csproj -- --serial-smoke
 - `--max-retries=N`: max setup retries before startup fails
 - `--tick=MS`: controller tick interval in milliseconds
 - `--test`: use simulated transport instead of hardware
+- `--transport=test`: alias for `--test`
+- `--conformance`: initialize the C# implementation with the WSS emulator and validate initialization plus one direct analog scenario
 - `--serial-smoke`: construct and dispose the Serial transport without connecting to hardware; used for release compatibility testing
 - `--help`: print usage information
 
 ## Config behavior
 
-By default, the CLI resolves the repository root explicitly and uses the app repo's `Config/` directory from there.
+By default, the CLI resolves the repository root explicitly and uses the app repo's `Config/` directory from there. Conformance mode instead creates and removes a temporary deterministic configuration from the shared WSS stimulation fixture.
 
 - default config path: `<repo-root>/Config`
 - override: `--config=PATH`
@@ -102,16 +112,18 @@ The CLI project references the library project directly with a `ProjectReference
 
 ## WSS release compatibility testing
 
-The repository contains `.github/workflows/wss-compatibility.yml` for validating this application against a published WSS release candidate. The workflow is manually triggered with `workflow_dispatch` and accepts a `release_tag`, such as `v0.3.0-rc.4`.
+The repository contains `.github/workflows/wss-compatibility.yml` for validating this application against the published WSS `v0.3.0-rc.7` release candidate. The workflow is manually triggered with `workflow_dispatch` and pins that exact release.
 
 The workflow:
 
 - downloads the exact `WSS-Serial-<TAG>.zip` GitHub Release asset
+- verifies the release archive against its published `SHA256SUMS.txt`
 - builds the application against the downloaded release instead of the checked-in DLLs
 - runs on Windows, Ubuntu, and macOS
 - verifies the application build and help/CLI loading
-- verifies TestMode startup
+- verifies TestMode startup through `--test` and `--transport=test`
 - constructs and disposes the Serial transport through `--serial-smoke`
+- runs the deterministic CLI conformance path on Ubuntu and checks its process exit code and PASS markers
 
 These non-hardware checks prove release-package compatibility and transport assembly loading. They do not prove communication with physical serial hardware.
 
@@ -119,8 +131,7 @@ For example, trigger the workflow with GitHub CLI using a release candidate tag 
 
 ```bash
 gh workflow run wss-compatibility.yml \
-  --ref main \
-  -f release_tag=v0.3.0-rc.4
+  --ref main
 ```
 
 Normal local development uses the DLLs tracked under the integration submodule. Compatibility CI sets `WSS_ARTIFACT_DIR` to the DLLs extracted from the selected WSS GitHub Release. The workflow also disables the checked-in integration DLL directory and verifies assembly hashes, preventing the compatibility test from silently validating only the checked-in DLL version.

@@ -1,18 +1,15 @@
-name: WSS Serial compatibility
+name: WSS RC.7 compatibility
 
 on:
   workflow_dispatch:
-    inputs:
-      release_tag:
-        description: WSSCore release tag
-        required: true
-        default: v0.3.0-rc.4
-        type: string
 
 jobs:
   compatibility:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    env:
+      WSS_RELEASE_TAG: v0.3.0-rc.7
+      WSS_ARCHIVE_NAME: WSS-Serial-v0.3.0-rc.7.zip
     strategy:
       fail-fast: false
       matrix:
@@ -30,21 +27,43 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          archive_name="WSS-Serial-${RELEASE_TAG}.zip"
-          artifact_dir="$RUNNER_TEMP/wss/$RELEASE_TAG"
-          archive_path="$RUNNER_TEMP/$archive_name"
-          gh release download "$RELEASE_TAG" --repo cwru-non-academic/WSSCore --pattern "$archive_name" --dir "$RUNNER_TEMP"
+          artifact_dir="$RUNNER_TEMP/wss/$WSS_RELEASE_TAG"
+          archive_path="$RUNNER_TEMP/$WSS_ARCHIVE_NAME"
+          checksums_path="$RUNNER_TEMP/SHA256SUMS.txt"
+          gh release download "$WSS_RELEASE_TAG" \
+            --repo cwru-non-academic/WSSCore \
+            --pattern "$WSS_ARCHIVE_NAME" \
+            --pattern SHA256SUMS.txt \
+            --dir "$RUNNER_TEMP"
           test -f "$archive_path"
+          test -f "$checksums_path"
+          expected_sha="$(awk -v name="$WSS_ARCHIVE_NAME" '$2 == name { print $1 }' "$checksums_path")"
+          actual_sha="$(openssl dgst -sha256 "$archive_path" | awk '{ print $NF }')"
+          test -n "$expected_sha"
+          test "$actual_sha" = "$expected_sha"
           mkdir -p "$artifact_dir"
           unzip -q "$archive_path" -d "$artifact_dir"
           echo "Extracted WSS artifacts: $artifact_dir"
           find "$artifact_dir" -maxdepth 1 -type f -print
           test -d "$artifact_dir"
-          test -f "$artifact_dir/WSS.Transport.Serial.dll"
+          for assembly in \
+            WSS_Core_Interface.dll \
+            WSS.Transport.Serial.dll \
+            Newtonsoft.Json.dll \
+            System.Buffers.dll \
+            System.Memory.dll \
+            System.Numerics.Vectors.dll \
+            System.Runtime.CompilerServices.Unsafe.dll \
+            System.Security.AccessControl.dll \
+            System.Security.Permissions.dll \
+            System.Security.Principal.Windows.dll \
+            System.IO.Ports.dll; do
+            test -f "$artifact_dir/$assembly"
+          done
           echo "WSS_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "Verified $WSS_ARCHIVE_NAME SHA256: $actual_sha"
 
       - name: Disable checked-in integration DLLs
         shell: bash
@@ -86,4 +105,17 @@ jobs:
           cli="src/bin/Release/net8.0/CLI_CSharp_WSS_Application.dll"
           dotnet "$cli" --help
           printf 'exit\n' | dotnet "$cli" --test
+          printf 'exit\n' | dotnet "$cli" --transport=test
           dotnet "$cli" --serial-smoke
+
+      - name: Run CLI behavioral conformance
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cli="src/bin/Release/net8.0/CLI_CSharp_WSS_Application.dll"
+          output="$RUNNER_TEMP/wss-cli-conformance.txt"
+          dotnet "$cli" --conformance | tee "$output"
+          grep -Fx "Initialization: PASS" "$output"
+          grep -Fx "Direct analog: PASS" "$output"
+          grep -Fx "Result: PASS" "$output"
