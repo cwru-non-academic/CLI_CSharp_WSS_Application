@@ -8,8 +8,8 @@ jobs:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     env:
-      WSS_RELEASE_TAG: v0.3.0-rc.7
-      WSS_ARCHIVE_NAME: WSS-Serial-v0.3.0-rc.7.zip
+      WSS_RELEASE_TAG: v0.3.0-rc.12
+      WSS_ARCHIVE_NAME: WSS-Serial-v0.3.0-rc.12.zip
     strategy:
       fail-fast: false
       matrix:
