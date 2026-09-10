@@ -1,0 +1,288 @@
+name: Promote Integration submodule
+run-name: Promote Integration ${{ inputs.integration_sha }} / ${{ inputs.correlation_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      integration_sha:
+        description: Full merged CSharp_WSS_Integration_Lib commit SHA
+        required: true
+        type: string
+      wss_release_tag:
+        description: WSSCore release tag approved by preflight
+        required: true
+        type: string
+      correlation_id:
+        description: Cross-repository promotion correlation identifier
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate promotion inputs
+        id: inputs
+        shell: bash
+        env:
+          INTEGRATION_SHA: ${{ inputs.integration_sha }}
+          WSS_RELEASE_TAG: ${{ inputs.wss_release_tag }}
+          CORRELATION_ID: ${{ inputs.correlation_id }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$INTEGRATION_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "integration_sha must be exactly 40 hexadecimal characters." >&2
+            exit 1
+          fi
+          if [[ -z "${WSS_RELEASE_TAG//[[:space:]]/}" || -z "${CORRELATION_ID//[[:space:]]/}" ]]; then
+            echo "wss_release_tag and correlation_id must be non-empty." >&2
+            exit 1
+          fi
+          if [[ "$WSS_RELEASE_TAG" == *$'\n'* || "$WSS_RELEASE_TAG" == *$'\r'* \
+            || "$CORRELATION_ID" == *$'\n'* || "$CORRELATION_ID" == *$'\r'* ]]; then
+            echo "wss_release_tag and correlation_id must each fit on one line." >&2
+            exit 1
+          fi
+          integration_sha="${INTEGRATION_SHA,,}"
+          echo "integration_sha=$integration_sha" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${integration_sha:0:12}" >> "$GITHUB_OUTPUT"
+          echo "branch=automation/integration-$integration_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Create read-only Integration token
+        id: integration-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.WSS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.WSS_GITHUB_APP_PRIVATE_KEY }}
+          owner: cwru-non-academic
+          repositories: CSharp_WSS_Integration_Lib
+          permission-contents: read
+
+      - name: Create CLI promotion token
+        id: cli-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.WSS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.WSS_GITHUB_APP_PRIVATE_KEY }}
+          owner: cwru-non-academic
+          repositories: CLI_CSharp_WSS_Application
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Check out current CLI dev
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+          token: ${{ steps.cli-token.outputs.token }}
+          persist-credentials: true
+
+      - name: Verify canonical submodule configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_url="https://github.com/cwru-non-academic/CSharp_WSS_Integration_Lib.git"
+          actual_url="$(git config --file .gitmodules --get submodule.SubModules/HFI_WSS_Csharp_Implementation.url)"
+          if [[ "$actual_url" != "$expected_url" ]]; then
+            echo "Unexpected Integration submodule URL: $actual_url" >&2
+            exit 1
+          fi
+
+      - name: Check out exact Integration commit
+        uses: actions/checkout@v4
+        with:
+          repository: cwru-non-academic/CSharp_WSS_Integration_Lib
+          ref: ${{ steps.inputs.outputs.integration_sha }}
+          path: SubModules/HFI_WSS_Csharp_Implementation
+          token: ${{ steps.integration-token.outputs.token }}
+          persist-credentials: false
+
+      - name: Verify exact Integration checkout
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.inputs.outputs.integration_sha }}
+        run: |
+          set -euo pipefail
+          integration_path="SubModules/HFI_WSS_Csharp_Implementation"
+          actual_sha="$(git -C "$integration_path" rev-parse HEAD)"
+          remote_url="$(git -C "$integration_path" remote get-url origin)"
+          normalized_remote="${remote_url%.git}"
+          if [[ "$actual_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Integration checkout mismatch. Expected $EXPECTED_SHA; actual $actual_sha." >&2
+            exit 1
+          fi
+          if [[ "$normalized_remote" != "https://github.com/cwru-non-academic/CSharp_WSS_Integration_Lib" ]]; then
+            echo "Unexpected Integration remote: $remote_url" >&2
+            exit 1
+          fi
+          if [[ -n "$(git -C "$integration_path" status --porcelain)" ]]; then
+            echo "Integration submodule worktree is not clean." >&2
+            exit 1
+          fi
+
+      - name: Check for an existing promotion PR
+        id: duplicate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.cli-token.outputs.token }}
+          BRANCH_NAME: ${{ steps.inputs.outputs.branch }}
+          EXPECTED_SHA: ${{ steps.inputs.outputs.integration_sha }}
+          WSS_RELEASE_TAG: ${{ inputs.wss_release_tag }}
+          CORRELATION_ID: ${{ inputs.correlation_id }}
+        run: |
+          set -euo pipefail
+          pr_json="$(gh api \
+            repos/cwru-non-academic/CLI_CSharp_WSS_Application/pulls \
+            --method GET \
+            -f state=open \
+            -f base=dev \
+            -f "head=cwru-non-academic:$BRANCH_NAME")"
+          pr_url="$(jq -r '.[0].html_url // empty' <<< "$pr_json")"
+          if [[ -n "$pr_url" ]]; then
+            pr_body="$(jq -r '.[0].body // empty' <<< "$pr_json")"
+            base_oid="$(jq -r '.[0].base.sha' <<< "$pr_json")"
+            head_oid="$(jq -r '.[0].head.sha' <<< "$pr_json")"
+            compare_json="$(gh api \
+              "repos/cwru-non-academic/CLI_CSharp_WSS_Application/compare/$base_oid...$head_oid")"
+            changed_files="$(jq -r '.files | length' <<< "$compare_json")"
+            changed_path="$(jq -r '.files[0].filename // empty' <<< "$compare_json")"
+            change_status="$(jq -r '.files[0].status // empty' <<< "$compare_json")"
+            head_tree_entry="$(gh api \
+              "repos/cwru-non-academic/CLI_CSharp_WSS_Application/git/trees/$head_oid?recursive=1" \
+              --jq '.tree[] | select(.path == "SubModules/HFI_WSS_Csharp_Implementation") | [.mode, .type, .sha] | @tsv')"
+            base_tree_entry="$(gh api \
+              "repos/cwru-non-academic/CLI_CSharp_WSS_Application/git/trees/$base_oid?recursive=1" \
+              --jq '.tree[] | select(.path == "SubModules/HFI_WSS_Csharp_Implementation") | [.mode, .type] | @tsv')"
+            expected_entry=$'160000\tcommit\t'"$EXPECTED_SHA"
+            if [[ "$changed_files" != "1" \
+              || "$changed_path" != "SubModules/HFI_WSS_Csharp_Implementation" \
+              || "$change_status" != "modified" \
+              || "$base_tree_entry" != $'160000\tcommit' \
+              || "$head_tree_entry" != "$expected_entry" ]]; then
+              echo "Existing promotion PR is not an exact gitlink-only promotion for the supplied Integration SHA." >&2
+              exit 1
+            fi
+            if ! grep -Fqx -- "- WSS release tag: \`$WSS_RELEASE_TAG\`" <<< "$pr_body" \
+              || ! grep -Fqx -- "- Correlation ID: \`$CORRELATION_ID\`" <<< "$pr_body"; then
+              echo "Existing promotion PR metadata does not match the supplied release tag and correlation ID." >&2
+              exit 1
+            fi
+            echo "Promotion PR already exists: $pr_url"
+            echo "reuse=true" >> "$GITHUB_OUTPUT"
+            echo "pr_url=$pr_url" >> "$GITHUB_OUTPUT"
+          else
+            echo "reuse=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Reject conflicting remote automation branch
+        if: steps.duplicate.outputs.reuse != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.cli-token.outputs.token }}
+          BRANCH_NAME: ${{ steps.inputs.outputs.branch }}
+        run: |
+          set -euo pipefail
+          if gh api \
+            "repos/cwru-non-academic/CLI_CSharp_WSS_Application/git/ref/heads/$BRANCH_NAME" \
+            --silent 2>/dev/null; then
+            echo "Remote branch $BRANCH_NAME already exists without a matching open PR; refusing to overwrite it." >&2
+            exit 1
+          fi
+
+      - name: Validate and stage the gitlink-only change
+        if: steps.duplicate.outputs.reuse != 'true'
+        shell: bash
+        env:
+          BRANCH_NAME: ${{ steps.inputs.outputs.branch }}
+          EXPECTED_SHA: ${{ steps.inputs.outputs.integration_sha }}
+        run: |
+          set -euo pipefail
+          integration_path="SubModules/HFI_WSS_Csharp_Implementation"
+          git switch -c "$BRANCH_NAME"
+
+          mapfile -t changed_paths < <(git diff --name-only)
+          if [[ ${#changed_paths[@]} -ne 1 || "${changed_paths[0]}" != "$integration_path" ]]; then
+            echo "Promotion must change only $integration_path." >&2
+            printf 'Changed path: %s\n' "${changed_paths[@]}" >&2
+            exit 1
+          fi
+
+          git add -- "$integration_path"
+          mapfile -t staged_paths < <(git diff --cached --name-only)
+          if [[ ${#staged_paths[@]} -ne 1 || "${staged_paths[0]}" != "$integration_path" ]]; then
+            echo 'Unexpected staged promotion paths.' >&2
+            exit 1
+          fi
+
+          read -r mode staged_sha stage path < <(git ls-files --stage -- "$integration_path")
+          if [[ "$mode" != "160000" || "$staged_sha" != "$EXPECTED_SHA" || "$stage" != "0" || "$path" != "$integration_path" ]]; then
+            echo "Staged entry is not the expected Integration gitlink." >&2
+            exit 1
+          fi
+
+          if [[ -n "$(git diff --name-only)" ]]; then
+            echo 'Unstaged repository changes remain after staging the gitlink.' >&2
+            exit 1
+          fi
+          git diff --cached --check
+          git diff --cached --submodule=short
+
+      - name: Commit and push promotion branch
+        if: steps.duplicate.outputs.reuse != 'true'
+        shell: bash
+        env:
+          BRANCH_NAME: ${{ steps.inputs.outputs.branch }}
+          WSS_RELEASE_TAG: ${{ inputs.wss_release_tag }}
+        run: |
+          set -euo pipefail
+          git config user.name 'wss-promotion[bot]'
+          git config user.email 'wss-promotion[bot]@users.noreply.github.com'
+          git commit -m "Update CSharp WSS integration for $WSS_RELEASE_TAG"
+          git push --set-upstream origin "$BRANCH_NAME"
+
+      - name: Open promotion pull request
+        if: steps.duplicate.outputs.reuse != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.cli-token.outputs.token }}
+          BRANCH_NAME: ${{ steps.inputs.outputs.branch }}
+          INTEGRATION_SHA: ${{ steps.inputs.outputs.integration_sha }}
+          SHORT_SHA: ${{ steps.inputs.outputs.short_sha }}
+          WSS_RELEASE_TAG: ${{ inputs.wss_release_tag }}
+          CORRELATION_ID: ${{ inputs.correlation_id }}
+        run: |
+          set -euo pipefail
+          body_file="$RUNNER_TEMP/promotion-pr-body.md"
+          cat > "$body_file" <<EOF
+          ## WSS Integration promotion
+
+          - WSS release tag: \`$WSS_RELEASE_TAG\`
+          - Integration SHA: \`$INTEGRATION_SHA\`
+          - Correlation ID: \`$CORRELATION_ID\`
+
+          This PR updates only the CLI Integration submodule pointer to the approved merged Integration commit.
+
+          Normal CLI PR CI will validate the committed CLI state, committed Integration submodule, and Integration's committed local \`lib/\`. CI has not yet completed; this PR makes no claim that those checks have passed.
+          EOF
+          pr_url="$(gh pr create \
+            --repo cwru-non-academic/CLI_CSharp_WSS_Application \
+            --base dev \
+            --head "$BRANCH_NAME" \
+            --title "Promote WSS $WSS_RELEASE_TAG / Integration $SHORT_SHA" \
+            --body-file "$body_file")"
+          echo "Created promotion PR: $pr_url"
+          echo "## Integration promotion" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Pull request: $pr_url" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report reused promotion pull request
+        if: steps.duplicate.outputs.reuse == 'true'
+        shell: bash
+        env:
+          PR_URL: ${{ steps.duplicate.outputs.pr_url }}
+        run: |
+          echo "Reused promotion PR: $PR_URL"
+          echo "## Integration promotion" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Existing pull request: $PR_URL" >> "$GITHUB_STEP_SUMMARY"
