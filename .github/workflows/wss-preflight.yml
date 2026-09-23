@@ -1,0 +1,303 @@
+name: WSS CLI preflight
+run-name: WSS preflight ${{ inputs.wss_release_tag || 'default' }} / ${{ inputs.correlation_id || 'manual' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      wss_release_tag:
+        description: WSSCore release tag; leave empty to use the workflow default
+        required: false
+        type: string
+      correlation_id:
+        description: Cross-repository promotion correlation identifier
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  DEFAULT_WSS_RELEASE_TAG: v0.3.0-rc.12
+
+jobs:
+  preflight:
+    name: Preflight / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest
+    steps:
+      - name: Create read-only Integration checkout token
+        id: integration-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.WSS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.WSS_GITHUB_APP_PRIVATE_KEY }}
+          owner: cwru-non-academic
+          repositories: CSharp_WSS_Integration_Lib
+          permission-contents: read
+
+      - name: Check out CLI
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve committed Integration SHA
+        id: integration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sha = (& git rev-parse 'HEAD:SubModules/HFI_WSS_Csharp_Implementation').Trim()
+          if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{40}$') {
+            throw 'Unable to resolve the committed Integration submodule SHA.'
+          }
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+
+      - name: Check out committed Integration submodule
+        uses: actions/checkout@v4
+        with:
+          repository: cwru-non-academic/CSharp_WSS_Integration_Lib
+          ref: ${{ steps.integration.outputs.sha }}
+          path: SubModules/HFI_WSS_Csharp_Implementation
+          token: ${{ steps.integration-token.outputs.token }}
+          persist-credentials: false
+
+      - name: Verify committed Integration checkout
+        shell: pwsh
+        env:
+          EXPECTED_INTEGRATION_SHA: ${{ steps.integration.outputs.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $integrationPath = 'SubModules/HFI_WSS_Csharp_Implementation'
+          $actualSha = (& git -C $integrationPath rev-parse HEAD).Trim()
+          $remoteUrl = (& git -C $integrationPath remote get-url origin).Trim().TrimEnd('/')
+          $normalizedRemote = $remoteUrl -replace '\.git$', ''
+          if ($actualSha -ne $env:EXPECTED_INTEGRATION_SHA) {
+            throw "Integration checkout mismatch. Expected $($env:EXPECTED_INTEGRATION_SHA); actual $actualSha."
+          }
+          if ($normalizedRemote -ne 'https://github.com/cwru-non-academic/CSharp_WSS_Integration_Lib') {
+            throw "Unexpected Integration remote: $remoteUrl"
+          }
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Resolve WSS release tag
+        shell: pwsh
+        env:
+          REQUESTED_WSS_RELEASE_TAG: ${{ inputs.wss_release_tag }}
+          CORRELATION_ID: ${{ inputs.correlation_id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $requestedTag = [string] $env:REQUESTED_WSS_RELEASE_TAG
+          $tag = $requestedTag.Trim()
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            $tag = $env:DEFAULT_WSS_RELEASE_TAG
+          }
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            throw 'The resolved WSS release tag is empty.'
+          }
+
+          "WSS_RELEASE_TAG=$tag" >> $env:GITHUB_ENV
+          "WSS_CORE_ARCHIVE_NAME=WSS-Core-$tag.zip" >> $env:GITHUB_ENV
+          "WSS_BLE_ARCHIVE_NAME=WSS-BLE-Unified-$tag.zip" >> $env:GITHUB_ENV
+          "Resolved WSS release tag: $tag"
+
+          "## WSS CLI preflight" >> $env:GITHUB_STEP_SUMMARY
+          "- Resolved release tag: ``$tag``" >> $env:GITHUB_STEP_SUMMARY
+          if (-not [string]::IsNullOrWhiteSpace($env:CORRELATION_ID)) {
+            "- Correlation ID: ``$($env:CORRELATION_ID)``" >> $env:GITHUB_STEP_SUMMARY
+          }
+
+      - name: Download, verify, and extract WSS release artifacts
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Assert-FileExists([string] $Path) {
+            if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+              throw "Required file is missing: $Path"
+            }
+          }
+
+          function Assert-DirectoryHasFiles([string] $Path) {
+            if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+              throw "Required directory is missing: $Path"
+            }
+            if (@(Get-ChildItem -LiteralPath $Path -File -Recurse).Count -eq 0) {
+              throw "Required directory contains no files: $Path"
+            }
+          }
+
+          $downloadDir = Join-Path $env:RUNNER_TEMP "wss-downloads/$env:WSS_RELEASE_TAG"
+          $coreArtifactDir = Join-Path $env:RUNNER_TEMP "wss-core/$env:WSS_RELEASE_TAG"
+          $bleArtifactDir = Join-Path $env:RUNNER_TEMP "wss-ble-unified/$env:WSS_RELEASE_TAG"
+          New-Item -ItemType Directory -Force -Path $downloadDir, $coreArtifactDir, $bleArtifactDir | Out-Null
+
+          & gh release download $env:WSS_RELEASE_TAG `
+            --repo cwru-non-academic/WSSCore `
+            --pattern $env:WSS_CORE_ARCHIVE_NAME `
+            --pattern $env:WSS_BLE_ARCHIVE_NAME `
+            --pattern SHA256SUMS.txt `
+            --dir $downloadDir
+          if ($LASTEXITCODE -ne 0) {
+            throw "WSS release download failed with exit code $LASTEXITCODE."
+          }
+
+          $checksumsPath = Join-Path $downloadDir 'SHA256SUMS.txt'
+          Assert-FileExists $checksumsPath
+          $checksumText = Get-Content -LiteralPath $checksumsPath -Raw
+          foreach ($archiveName in @($env:WSS_CORE_ARCHIVE_NAME, $env:WSS_BLE_ARCHIVE_NAME)) {
+            $archivePath = Join-Path $downloadDir $archiveName
+            Assert-FileExists $archivePath
+            $escapedName = [Regex]::Escape($archiveName)
+            $checksumMatches = [Regex]::Matches(
+              $checksumText,
+              "(?m)^(?<hash>[0-9a-fA-F]{64})\s+\*?$escapedName\r?$"
+            )
+            if ($checksumMatches.Count -ne 1) {
+              throw "SHA256SUMS.txt must contain exactly one valid checksum entry for $archiveName; found $($checksumMatches.Count)."
+            }
+            $expectedSha = $checksumMatches[0].Groups['hash'].Value
+            $actualSha = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash
+            if (-not $actualSha.Equals($expectedSha, [StringComparison]::OrdinalIgnoreCase)) {
+              throw "SHA-256 mismatch for $archiveName. Expected $expectedSha; actual $actualSha."
+            }
+            "Verified $archiveName SHA256: $actualSha"
+          }
+
+          Expand-Archive -LiteralPath (Join-Path $downloadDir $env:WSS_CORE_ARCHIVE_NAME) -DestinationPath $coreArtifactDir -Force
+          Expand-Archive -LiteralPath (Join-Path $downloadDir $env:WSS_BLE_ARCHIVE_NAME) -DestinationPath $bleArtifactDir -Force
+
+          Assert-FileExists (Join-Path $coreArtifactDir 'WSS_Core_Interface.dll')
+          Assert-FileExists (Join-Path $bleArtifactDir 'WSS.Transport.BLE.dll')
+          foreach ($requiredFile in @(
+            'backends/windows/WSS.Transport.BLE.Windows.dll',
+            'backends/windows/Microsoft.Windows.SDK.NET.dll',
+            'backends/windows/WinRT.Runtime.dll',
+            'backends/linux/WSS.Transport.BLE.Linux.dll',
+            'backends/linux/Linux.Bluetooth.dll',
+            'backends/linux/Tmds.DBus.dll'
+          )) {
+            Assert-FileExists (Join-Path $bleArtifactDir $requiredFile)
+          }
+          foreach ($runtimeTree in @('runtimes/win', 'runtimes/unix', 'runtimes/linux-x64')) {
+            Assert-DirectoryHasFiles (Join-Path $bleArtifactDir $runtimeTree)
+          }
+
+          "WSS_ARTIFACT_DIR=$coreArtifactDir" >> $env:GITHUB_ENV
+          "WSS_BLE_ARTIFACT_DIR=$bleArtifactDir" >> $env:GITHUB_ENV
+
+      - name: Disable checked-in fallback and clean outputs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $integrationLib = 'SubModules/HFI_WSS_Csharp_Implementation/lib'
+          if (-not (Test-Path -LiteralPath $integrationLib -PathType Container)) {
+            throw 'The checked-in Integration lib directory is missing, so fallback disabling cannot be verified.'
+          }
+          Move-Item -LiteralPath $integrationLib -Destination "$integrationLib.ci-disabled"
+          if (Test-Path -LiteralPath $integrationLib) {
+            throw 'The checked-in Integration lib directory still exists after fallback disabling.'
+          }
+          foreach ($outputPath in @(
+            'src/bin',
+            'src/obj',
+            'SubModules/HFI_WSS_Csharp_Implementation/src/bin',
+            'SubModules/HFI_WSS_Csharp_Implementation/src/obj'
+          )) {
+            Remove-Item -LiteralPath $outputPath -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Restore with downloaded WSS artifacts
+        shell: pwsh
+        run: >-
+          dotnet restore CLI_CSharp_WSS_Application.sln
+          "-p:WSS_ARTIFACT_DIR=$env:WSS_ARTIFACT_DIR"
+          "-p:WSS_BLE_ARTIFACT_DIR=$env:WSS_BLE_ARTIFACT_DIR"
+
+      - name: Build Release with downloaded WSS artifacts
+        shell: pwsh
+        run: >-
+          dotnet build CLI_CSharp_WSS_Application.sln
+          -c Release
+          --no-restore
+          -p:TreatWarningsAsErrors=true
+          "-p:WSS_ARTIFACT_DIR=$env:WSS_ARTIFACT_DIR"
+          "-p:WSS_BLE_ARTIFACT_DIR=$env:WSS_BLE_ARTIFACT_DIR"
+
+      - name: Verify downloaded WSS propagation to CLI output
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $outputDir = 'src/bin/Release/net9.0'
+
+          function Assert-SameHash([string] $SourceFile, [string] $OutputFile) {
+            if (-not (Test-Path -LiteralPath $SourceFile -PathType Leaf)) {
+              throw "Authoritative release file is missing: $SourceFile"
+            }
+            if (-not (Test-Path -LiteralPath $OutputFile -PathType Leaf)) {
+              throw "CLI output file is missing: $OutputFile"
+            }
+            $sourceSha = (Get-FileHash -LiteralPath $SourceFile -Algorithm SHA256).Hash
+            $outputSha = (Get-FileHash -LiteralPath $OutputFile -Algorithm SHA256).Hash
+            if (-not $outputSha.Equals($sourceSha, [StringComparison]::OrdinalIgnoreCase)) {
+              throw "CLI output hash mismatch for $OutputFile. Expected $sourceSha; actual $outputSha."
+            }
+            "$OutputFile SHA256: $outputSha"
+          }
+
+          function Assert-TreePropagated([string] $SourceRoot, [string] $RelativeTree) {
+            $sourceTree = Join-Path $SourceRoot $RelativeTree
+            $sourceFiles = @(Get-ChildItem -LiteralPath $sourceTree -File -Recurse)
+            if ($sourceFiles.Count -eq 0) {
+              throw "Authoritative release tree is missing or empty: $sourceTree"
+            }
+            foreach ($sourceFile in $sourceFiles) {
+              $relativeFile = [IO.Path]::GetRelativePath($SourceRoot, $sourceFile.FullName)
+              Assert-SameHash $sourceFile.FullName (Join-Path $outputDir $relativeFile)
+            }
+          }
+
+          Assert-SameHash (Join-Path $env:WSS_ARTIFACT_DIR 'WSS_Core_Interface.dll') (Join-Path $outputDir 'WSS_Core_Interface.dll')
+          Assert-SameHash (Join-Path $env:WSS_BLE_ARTIFACT_DIR 'WSS.Transport.BLE.dll') (Join-Path $outputDir 'WSS.Transport.BLE.dll')
+          Assert-TreePropagated $env:WSS_BLE_ARTIFACT_DIR 'backends/windows'
+          Assert-TreePropagated $env:WSS_BLE_ARTIFACT_DIR 'backends/linux'
+          Assert-TreePropagated $env:WSS_BLE_ARTIFACT_DIR 'runtimes/win'
+          Assert-TreePropagated $env:WSS_BLE_ARTIFACT_DIR 'runtimes/unix'
+          Assert-TreePropagated $env:WSS_BLE_ARTIFACT_DIR 'runtimes/linux-x64'
+
+      - name: Run CLI compatibility smoke checks
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cli = 'src/bin/Release/net9.0/CLI_CSharp_WSS_Application.dll'
+          & dotnet $cli --help
+          if ($LASTEXITCODE -ne 0) { throw 'CLI help smoke check failed.' }
+          "exit`n" | & dotnet $cli --test
+          if ($LASTEXITCODE -ne 0) { throw 'CLI Test transport smoke check failed.' }
+          "exit`n" | & dotnet $cli --transport=test
+          if ($LASTEXITCODE -ne 0) { throw 'CLI explicit Test transport smoke check failed.' }
+          & dotnet $cli --serial-smoke
+          if ($LASTEXITCODE -ne 0) { throw 'CLI Serial smoke check failed.' }
+
+      - name: Run CLI behavioral conformance
+        if: matrix.os == 'ubuntu-latest'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = & dotnet 'src/bin/Release/net9.0/CLI_CSharp_WSS_Application.dll' --conformance
+          if ($LASTEXITCODE -ne 0) { throw 'CLI conformance command failed.' }
+          $output | ForEach-Object { $_ }
+          foreach ($expectedLine in @('Initialization: PASS', 'Direct analog: PASS', 'Result: PASS')) {
+            if ($output -cnotcontains $expectedLine) {
+              throw "CLI conformance output is missing: $expectedLine"
+            }
+          }
