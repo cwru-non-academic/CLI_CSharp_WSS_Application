@@ -288,21 +288,15 @@ internal static class Program
             amplitude,
             scenario.InterPulseInterval);
 
-        bool stimulationObserved = false;
-        for (int i = 0; i < StimulationPollLimit; i++)
+        StimulationConformanceResult stimulation = conformance.ValidateStimulation(
+            scenario.Expectation,
+            baseline);
+        for (int i = 0; i < StimulationPollLimit && !stimulation.Passed; i++)
         {
-            stimulationObserved = conformance.StimulationHistory.Any(
-                observation => observation.SequenceNumber > baseline.SequenceNumber);
-            if (stimulationObserved)
-                break;
-
             await Task.Delay(1);
+            stimulation = conformance.ValidateStimulation(scenario.Expectation, baseline);
         }
 
-        if (!stimulationObserved)
-            return ReportConformanceFailure("Direct analog", "No new stimulation observation arrived within the finite poll limit.");
-
-        StimulationConformanceResult stimulation = conformance.ValidateStimulation(scenario.Expectation, baseline);
         if (!stimulation.Passed)
             return ReportConformanceFailure("Direct analog", stimulation.Failures);
 
