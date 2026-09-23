@@ -20,74 +20,14 @@ env:
   DEFAULT_WSS_RELEASE_TAG: v0.3.0-rc.12
 
 jobs:
-  preflight:
-    name: Preflight / ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - windows-latest
-          - ubuntu-latest
-          - macos-latest
+  provenance:
+    name: WSS release artifact provenance
+    runs-on: ubuntu-latest
+    outputs:
+      release-tag: ${{ steps.release.outputs.tag }}
     steps:
-      - name: Create read-only Integration checkout token
-        id: integration-token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ vars.WSS_GITHUB_APP_ID }}
-          private-key: ${{ secrets.WSS_GITHUB_APP_PRIVATE_KEY }}
-          owner: cwru-non-academic
-          repositories: CSharp_WSS_Integration_Lib
-          permission-contents: read
-
-      - name: Check out CLI
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: Resolve committed Integration SHA
-        id: integration
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $sha = (& git rev-parse 'HEAD:SubModules/HFI_WSS_Csharp_Implementation').Trim()
-          if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{40}$') {
-            throw 'Unable to resolve the committed Integration submodule SHA.'
-          }
-          "sha=$sha" >> $env:GITHUB_OUTPUT
-
-      - name: Check out committed Integration submodule
-        uses: actions/checkout@v4
-        with:
-          repository: cwru-non-academic/CSharp_WSS_Integration_Lib
-          ref: ${{ steps.integration.outputs.sha }}
-          path: SubModules/HFI_WSS_Csharp_Implementation
-          token: ${{ steps.integration-token.outputs.token }}
-          persist-credentials: false
-
-      - name: Verify committed Integration checkout
-        shell: pwsh
-        env:
-          EXPECTED_INTEGRATION_SHA: ${{ steps.integration.outputs.sha }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $integrationPath = 'SubModules/HFI_WSS_Csharp_Implementation'
-          $actualSha = (& git -C $integrationPath rev-parse HEAD).Trim()
-          $remoteUrl = (& git -C $integrationPath remote get-url origin).Trim().TrimEnd('/')
-          $normalizedRemote = $remoteUrl -replace '\.git$', ''
-          if ($actualSha -ne $env:EXPECTED_INTEGRATION_SHA) {
-            throw "Integration checkout mismatch. Expected $($env:EXPECTED_INTEGRATION_SHA); actual $actualSha."
-          }
-          if ($normalizedRemote -ne 'https://github.com/cwru-non-academic/CSharp_WSS_Integration_Lib') {
-            throw "Unexpected Integration remote: $remoteUrl"
-          }
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 9.0.x
-
       - name: Resolve WSS release tag
+        id: release
         shell: pwsh
         env:
           REQUESTED_WSS_RELEASE_TAG: ${{ inputs.wss_release_tag }}
@@ -103,6 +43,7 @@ jobs:
             throw 'The resolved WSS release tag is empty.'
           }
 
+          "tag=$tag" >> $env:GITHUB_OUTPUT
           "WSS_RELEASE_TAG=$tag" >> $env:GITHUB_ENV
           "WSS_CORE_ARCHIVE_NAME=WSS-Core-$tag.zip" >> $env:GITHUB_ENV
           "WSS_BLE_ARCHIVE_NAME=WSS-BLE-Unified-$tag.zip" >> $env:GITHUB_ENV
@@ -137,8 +78,8 @@ jobs:
           }
 
           $downloadDir = Join-Path $env:RUNNER_TEMP "wss-downloads/$env:WSS_RELEASE_TAG"
-          $coreArtifactDir = Join-Path $env:RUNNER_TEMP "wss-core/$env:WSS_RELEASE_TAG"
-          $bleArtifactDir = Join-Path $env:RUNNER_TEMP "wss-ble-unified/$env:WSS_RELEASE_TAG"
+          $coreArtifactDir = Join-Path $env:RUNNER_TEMP 'verified-wss-core'
+          $bleArtifactDir = Join-Path $env:RUNNER_TEMP 'verified-wss-ble'
           New-Item -ItemType Directory -Force -Path $downloadDir, $coreArtifactDir, $bleArtifactDir | Out-Null
 
           & gh release download $env:WSS_RELEASE_TAG `
@@ -192,8 +133,97 @@ jobs:
             Assert-DirectoryHasFiles (Join-Path $bleArtifactDir $runtimeTree)
           }
 
-          "WSS_ARTIFACT_DIR=$coreArtifactDir" >> $env:GITHUB_ENV
-          "WSS_BLE_ARTIFACT_DIR=$bleArtifactDir" >> $env:GITHUB_ENV
+      - name: Upload verified WSS Core artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-wss-core
+          path: ${{ runner.temp }}/verified-wss-core
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload verified WSS BLE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-wss-ble
+          path: ${{ runner.temp }}/verified-wss-ble
+          if-no-files-found: error
+          retention-days: 1
+
+  general-conformance:
+    name: CLI general conformance
+    needs: provenance
+    runs-on: ubuntu-latest
+    env:
+      WSS_ARTIFACT_DIR: ${{ github.workspace }}/.wss-artifacts/core
+      WSS_BLE_ARTIFACT_DIR: ${{ github.workspace }}/.wss-artifacts/ble
+    steps:
+      - name: Create read-only Integration checkout token
+        id: integration-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.WSS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.WSS_GITHUB_APP_PRIVATE_KEY }}
+          owner: cwru-non-academic
+          repositories: CSharp_WSS_Integration_Lib
+          permission-contents: read
+
+      - name: Check out CLI
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve committed Integration SHA
+        id: integration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sha = (& git rev-parse 'HEAD:SubModules/HFI_WSS_Csharp_Implementation').Trim()
+          if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{40}$') {
+            throw 'Unable to resolve the committed Integration submodule SHA.'
+          }
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+
+      - name: Check out committed Integration submodule
+        uses: actions/checkout@v4
+        with:
+          repository: cwru-non-academic/CSharp_WSS_Integration_Lib
+          ref: ${{ steps.integration.outputs.sha }}
+          path: SubModules/HFI_WSS_Csharp_Implementation
+          token: ${{ steps.integration-token.outputs.token }}
+          persist-credentials: false
+
+      - name: Verify committed Integration checkout
+        shell: pwsh
+        env:
+          EXPECTED_INTEGRATION_SHA: ${{ steps.integration.outputs.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $integrationPath = 'SubModules/HFI_WSS_Csharp_Implementation'
+          $actualSha = (& git -C $integrationPath rev-parse HEAD).Trim()
+          $remoteUrl = (& git -C $integrationPath remote get-url origin).Trim().TrimEnd('/')
+          $normalizedRemote = $remoteUrl -replace '\.git$', ''
+          if ($actualSha -ne $env:EXPECTED_INTEGRATION_SHA) {
+            throw "Integration checkout mismatch. Expected $($env:EXPECTED_INTEGRATION_SHA); actual $actualSha."
+          }
+          if ($normalizedRemote -ne 'https://github.com/cwru-non-academic/CSharp_WSS_Integration_Lib') {
+            throw "Unexpected Integration remote: $remoteUrl"
+          }
+
+      - name: Download verified WSS Core artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: verified-wss-core
+          path: ${{ env.WSS_ARTIFACT_DIR }}
+
+      - name: Download verified WSS BLE artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: verified-wss-ble
+          path: ${{ env.WSS_BLE_ARTIFACT_DIR }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
 
       - name: Disable checked-in fallback and clean outputs
         shell: pwsh
@@ -211,27 +241,28 @@ jobs:
             'src/bin',
             'src/obj',
             'SubModules/HFI_WSS_Csharp_Implementation/src/bin',
-            'SubModules/HFI_WSS_Csharp_Implementation/src/obj'
+            'SubModules/HFI_WSS_Csharp_Implementation/src/obj',
+            'SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/bin',
+            'SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/obj'
           )) {
             Remove-Item -LiteralPath $outputPath -Recurse -Force -ErrorAction SilentlyContinue
           }
 
-      - name: Restore with downloaded WSS artifacts
+      - name: Restore shared conformance projects with downloaded WSS artifacts
         shell: pwsh
-        run: >-
-          dotnet restore CLI_CSharp_WSS_Application.sln
-          "-p:WSS_ARTIFACT_DIR=$env:WSS_ARTIFACT_DIR"
-          "-p:WSS_BLE_ARTIFACT_DIR=$env:WSS_BLE_ARTIFACT_DIR"
+        run: |
+          dotnet restore CLI_CSharp_WSS_Application.sln "-p:WSS_ARTIFACT_DIR=$env:WSS_ARTIFACT_DIR" "-p:WSS_BLE_ARTIFACT_DIR=$env:WSS_BLE_ARTIFACT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw 'CLI restore failed.' }
+          dotnet restore 'SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/Wss.CSharpImplementation.Tests.csproj' "-p:WSS_ARTIFACT_DIR=$env:WSS_ARTIFACT_DIR" "-p:WSS_BLE_ARTIFACT_DIR=$env:WSS_BLE_ARTIFACT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw 'Integration conformance test restore failed.' }
 
-      - name: Build Release with downloaded WSS artifacts
+      - name: Build shared conformance projects with downloaded WSS artifacts
         shell: pwsh
-        run: >-
-          dotnet build CLI_CSharp_WSS_Application.sln
-          -c Release
-          --no-restore
-          -p:TreatWarningsAsErrors=true
-          "-p:WSS_ARTIFACT_DIR=$env:WSS_ARTIFACT_DIR"
-          "-p:WSS_BLE_ARTIFACT_DIR=$env:WSS_BLE_ARTIFACT_DIR"
+        run: |
+          dotnet build CLI_CSharp_WSS_Application.sln -c Release --no-restore -p:TreatWarningsAsErrors=true "-p:WSS_ARTIFACT_DIR=$env:WSS_ARTIFACT_DIR" "-p:WSS_BLE_ARTIFACT_DIR=$env:WSS_BLE_ARTIFACT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw 'CLI build failed.' }
+          dotnet build 'SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/Wss.CSharpImplementation.Tests.csproj' -c Release --no-restore -p:TreatWarningsAsErrors=true "-p:WSS_ARTIFACT_DIR=$env:WSS_ARTIFACT_DIR" "-p:WSS_BLE_ARTIFACT_DIR=$env:WSS_BLE_ARTIFACT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw 'Integration conformance test build failed.' }
 
       - name: Verify downloaded WSS propagation to CLI output
         shell: pwsh
@@ -251,7 +282,190 @@ jobs:
             if (-not $outputSha.Equals($sourceSha, [StringComparison]::OrdinalIgnoreCase)) {
               throw "CLI output hash mismatch for $OutputFile. Expected $sourceSha; actual $outputSha."
             }
-            "$OutputFile SHA256: $outputSha"
+          }
+
+          Assert-SameHash (Join-Path $env:WSS_ARTIFACT_DIR 'WSS_Core_Interface.dll') (Join-Path $outputDir 'WSS_Core_Interface.dll')
+          Assert-SameHash (Join-Path $env:WSS_BLE_ARTIFACT_DIR 'WSS.Transport.BLE.dll') (Join-Path $outputDir 'WSS.Transport.BLE.dll')
+
+      - name: Run Test transport smoke checks
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cli = 'src/bin/Release/net9.0/CLI_CSharp_WSS_Application.dll'
+          "exit`n" | & dotnet $cli --test
+          if ($LASTEXITCODE -ne 0) { throw 'CLI Test transport smoke check failed.' }
+          "exit`n" | & dotnet $cli --transport=test
+          if ($LASTEXITCODE -ne 0) { throw 'CLI explicit Test transport smoke check failed.' }
+
+      - name: Run CLI behavioral conformance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = & dotnet 'src/bin/Release/net9.0/CLI_CSharp_WSS_Application.dll' --conformance
+          if ($LASTEXITCODE -ne 0) { throw 'CLI conformance command failed.' }
+          $output | ForEach-Object { $_ }
+          foreach ($expectedLine in @('Initialization: PASS', 'Direct analog: PASS', 'Result: PASS')) {
+            if ($output -cnotcontains $expectedLine) {
+              throw "CLI conformance output is missing: $expectedLine"
+            }
+          }
+
+      - name: Run shared Integration conformance scenarios
+        shell: pwsh
+        run: >-
+          dotnet test
+          SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/Wss.CSharpImplementation.Tests.csproj
+          -c Release
+          --no-build
+          --no-restore
+          -p:TreatWarningsAsErrors=true
+          "-p:WSS_ARTIFACT_DIR=$env:WSS_ARTIFACT_DIR"
+          "-p:WSS_BLE_ARTIFACT_DIR=$env:WSS_BLE_ARTIFACT_DIR"
+          --filter FullyQualifiedName~StimulationControllerConformanceTests
+
+  platform-compatibility:
+    name: CLI platform compatibility (${{ matrix.label }})
+    needs: provenance
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows
+          - os: ubuntu-latest
+            label: Ubuntu
+          - os: macos-latest
+            label: macOS
+    env:
+      WSS_ARTIFACT_DIR: ${{ github.workspace }}/.wss-artifacts/core
+      WSS_BLE_ARTIFACT_DIR: ${{ github.workspace }}/.wss-artifacts/ble
+    steps:
+      - name: Create read-only Integration checkout token
+        id: integration-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.WSS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.WSS_GITHUB_APP_PRIVATE_KEY }}
+          owner: cwru-non-academic
+          repositories: CSharp_WSS_Integration_Lib
+          permission-contents: read
+
+      - name: Check out CLI
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve committed Integration SHA
+        id: integration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sha = (& git rev-parse 'HEAD:SubModules/HFI_WSS_Csharp_Implementation').Trim()
+          if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{40}$') {
+            throw 'Unable to resolve the committed Integration submodule SHA.'
+          }
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+
+      - name: Check out committed Integration submodule
+        uses: actions/checkout@v4
+        with:
+          repository: cwru-non-academic/CSharp_WSS_Integration_Lib
+          ref: ${{ steps.integration.outputs.sha }}
+          path: SubModules/HFI_WSS_Csharp_Implementation
+          token: ${{ steps.integration-token.outputs.token }}
+          persist-credentials: false
+
+      - name: Verify committed Integration checkout
+        shell: pwsh
+        env:
+          EXPECTED_INTEGRATION_SHA: ${{ steps.integration.outputs.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $integrationPath = 'SubModules/HFI_WSS_Csharp_Implementation'
+          $actualSha = (& git -C $integrationPath rev-parse HEAD).Trim()
+          $remoteUrl = (& git -C $integrationPath remote get-url origin).Trim().TrimEnd('/')
+          $normalizedRemote = $remoteUrl -replace '\.git$', ''
+          if ($actualSha -ne $env:EXPECTED_INTEGRATION_SHA) {
+            throw "Integration checkout mismatch. Expected $($env:EXPECTED_INTEGRATION_SHA); actual $actualSha."
+          }
+          if ($normalizedRemote -ne 'https://github.com/cwru-non-academic/CSharp_WSS_Integration_Lib') {
+            throw "Unexpected Integration remote: $remoteUrl"
+          }
+
+      - name: Download verified WSS Core artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: verified-wss-core
+          path: ${{ env.WSS_ARTIFACT_DIR }}
+
+      - name: Download verified WSS BLE artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: verified-wss-ble
+          path: ${{ env.WSS_BLE_ARTIFACT_DIR }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Disable checked-in fallback and clean outputs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $integrationLib = 'SubModules/HFI_WSS_Csharp_Implementation/lib'
+          if (-not (Test-Path -LiteralPath $integrationLib -PathType Container)) {
+            throw 'The checked-in Integration lib directory is missing, so fallback disabling cannot be verified.'
+          }
+          Move-Item -LiteralPath $integrationLib -Destination "$integrationLib.ci-disabled"
+          if (Test-Path -LiteralPath $integrationLib) {
+            throw 'The checked-in Integration lib directory still exists after fallback disabling.'
+          }
+          foreach ($outputPath in @(
+            'src/bin',
+            'src/obj',
+            'SubModules/HFI_WSS_Csharp_Implementation/src/bin',
+            'SubModules/HFI_WSS_Csharp_Implementation/src/obj',
+            'SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/bin',
+            'SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/obj'
+          )) {
+            Remove-Item -LiteralPath $outputPath -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Restore with downloaded WSS artifacts
+        shell: pwsh
+        run: |
+          dotnet restore CLI_CSharp_WSS_Application.sln "-p:WSS_ARTIFACT_DIR=$env:WSS_ARTIFACT_DIR" "-p:WSS_BLE_ARTIFACT_DIR=$env:WSS_BLE_ARTIFACT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw 'CLI restore failed.' }
+          dotnet restore 'SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/Wss.CSharpImplementation.Tests.csproj' "-p:WSS_ARTIFACT_DIR=$env:WSS_ARTIFACT_DIR" "-p:WSS_BLE_ARTIFACT_DIR=$env:WSS_BLE_ARTIFACT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw 'Integration platform test restore failed.' }
+
+      - name: Build Release with downloaded WSS artifacts
+        shell: pwsh
+        run: |
+          dotnet build CLI_CSharp_WSS_Application.sln -c Release --no-restore -p:TreatWarningsAsErrors=true "-p:WSS_ARTIFACT_DIR=$env:WSS_ARTIFACT_DIR" "-p:WSS_BLE_ARTIFACT_DIR=$env:WSS_BLE_ARTIFACT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw 'CLI build failed.' }
+          dotnet build 'SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/Wss.CSharpImplementation.Tests.csproj' -c Release --no-restore -p:TreatWarningsAsErrors=true "-p:WSS_ARTIFACT_DIR=$env:WSS_ARTIFACT_DIR" "-p:WSS_BLE_ARTIFACT_DIR=$env:WSS_BLE_ARTIFACT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw 'Integration platform test build failed.' }
+
+      - name: Verify downloaded WSS propagation to CLI output
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $outputDir = 'src/bin/Release/net9.0'
+
+          function Assert-SameHash([string] $SourceFile, [string] $OutputFile) {
+            if (-not (Test-Path -LiteralPath $SourceFile -PathType Leaf)) {
+              throw "Authoritative release file is missing: $SourceFile"
+            }
+            if (-not (Test-Path -LiteralPath $OutputFile -PathType Leaf)) {
+              throw "CLI output file is missing: $OutputFile"
+            }
+            $sourceSha = (Get-FileHash -LiteralPath $SourceFile -Algorithm SHA256).Hash
+            $outputSha = (Get-FileHash -LiteralPath $OutputFile -Algorithm SHA256).Hash
+            if (-not $outputSha.Equals($sourceSha, [StringComparison]::OrdinalIgnoreCase)) {
+              throw "CLI output hash mismatch for $OutputFile. Expected $sourceSha; actual $outputSha."
+            }
           }
 
           function Assert-TreePropagated([string] $SourceRoot, [string] $RelativeTree) {
@@ -274,30 +488,25 @@ jobs:
           Assert-TreePropagated $env:WSS_BLE_ARTIFACT_DIR 'runtimes/unix'
           Assert-TreePropagated $env:WSS_BLE_ARTIFACT_DIR 'runtimes/linux-x64'
 
-      - name: Run CLI compatibility smoke checks
+      - name: Run platform runtime smoke checks
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $cli = 'src/bin/Release/net9.0/CLI_CSharp_WSS_Application.dll'
           & dotnet $cli --help
           if ($LASTEXITCODE -ne 0) { throw 'CLI help smoke check failed.' }
-          "exit`n" | & dotnet $cli --test
-          if ($LASTEXITCODE -ne 0) { throw 'CLI Test transport smoke check failed.' }
-          "exit`n" | & dotnet $cli --transport=test
-          if ($LASTEXITCODE -ne 0) { throw 'CLI explicit Test transport smoke check failed.' }
           & dotnet $cli --serial-smoke
           if ($LASTEXITCODE -ne 0) { throw 'CLI Serial smoke check failed.' }
 
-      - name: Run CLI behavioral conformance
-        if: matrix.os == 'ubuntu-latest'
+      - name: Run platform-dependent Integration tests
         shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $output = & dotnet 'src/bin/Release/net9.0/CLI_CSharp_WSS_Application.dll' --conformance
-          if ($LASTEXITCODE -ne 0) { throw 'CLI conformance command failed.' }
-          $output | ForEach-Object { $_ }
-          foreach ($expectedLine in @('Initialization: PASS', 'Direct analog: PASS', 'Result: PASS')) {
-            if ($output -cnotcontains $expectedLine) {
-              throw "CLI conformance output is missing: $expectedLine"
-            }
-          }
+        run: >-
+          dotnet test
+          SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/Wss.CSharpImplementation.Tests.csproj
+          -c Release
+          --no-build
+          --no-restore
+          -p:TreatWarningsAsErrors=true
+          "-p:WSS_ARTIFACT_DIR=$env:WSS_ARTIFACT_DIR"
+          "-p:WSS_BLE_ARTIFACT_DIR=$env:WSS_BLE_ARTIFACT_DIR"
+          --filter "FullyQualifiedName~SerialRuntimeSelectionTests|FullyQualifiedName~BleBackendLoadingTests"
