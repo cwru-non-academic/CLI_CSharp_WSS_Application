@@ -121,28 +121,20 @@ The CLI project references the library project directly with a `ProjectReference
 - `src/CLI_CSharp_WSS_Application.csproj`
 - `SubModules/HFI_WSS_Csharp_Implementation/src/Wss.CSharpImplementation.csproj`
 
-## WSS release compatibility testing
+## CI and WSS release compatibility testing
 
-The repository contains `.github/workflows/wss-compatibility.yml` for validating this application against the published WSS `v0.3.0-rc.7` release candidate. The workflow is manually triggered with `workflow_dispatch` and pins that exact release.
+Normal pull-request CI separates shared behavior from operating-system compatibility:
 
-The workflow:
+- `CLI general conformance` runs hardware-independent Test transport, CLI conformance, and shared Integration conformance scenarios once.
+- `CLI platform compatibility (Windows)`, `CLI platform compatibility (Ubuntu)`, and `CLI platform compatibility (macOS)` build and run platform loading and Serial construction smoke checks on each operating system.
 
-- downloads the exact `WSS-Serial-<TAG>.zip` GitHub Release asset
-- verifies the release archive against its published `SHA256SUMS.txt`
-- builds the application against the downloaded release instead of the checked-in DLLs
-- runs on Windows, Ubuntu, and macOS
-- verifies the application build and help/CLI loading
-- verifies Test transport startup through `--test` and `--transport=test`
-- constructs and disposes the Serial transport through `--serial-smoke`
-- runs the deterministic CLI conformance path on Ubuntu and checks its process exit code and PASS markers
+The manually triggered `.github/workflows/wss-preflight.yml` validates the CLI against an exact WSS release candidate. Its `WSS release artifact provenance` job downloads `WSS-Core-<TAG>.zip`, `WSS-BLE-Unified-<TAG>.zip`, and `SHA256SUMS.txt`, verifies the published checksums and required layout, and supplies the verified trees to the general and platform jobs. Those jobs disable the checked-in Integration `lib/` fallback, build against the downloaded release, and verify propagation into the CLI output.
 
-These non-hardware checks prove release-package compatibility and transport assembly loading. They do not prove communication with physical serial hardware.
+The platform checks cover Windows, Ubuntu, and macOS build/runtime and Serial compatibility. They verify packaged backend and runtime trees where applicable, but the macOS check does not establish BLE runtime support. These non-hardware checks do not prove communication with physical hardware.
 
-For example, trigger the workflow with GitHub CLI using a release candidate tag appropriate for the test:
+For example, trigger preflight with GitHub CLI using the workflow's configured default release candidate:
 
 ```bash
-gh workflow run wss-compatibility.yml \
+gh workflow run wss-preflight.yml \
   --ref main
 ```
-
-Normal local development uses the DLLs tracked under the integration submodule. Compatibility CI sets `WSS_ARTIFACT_DIR` to the DLLs extracted from the selected WSS GitHub Release. The workflow also disables the checked-in integration DLL directory and verifies assembly hashes, preventing the compatibility test from silently validating only the checked-in DLL version.
