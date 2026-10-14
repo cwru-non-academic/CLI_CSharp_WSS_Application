@@ -8,8 +8,12 @@ on:
         description: Full merged CSharp_WSS_Integration_Lib commit SHA
         required: true
         type: string
-      wss_release_tag:
-        description: WSSCore release tag approved by preflight
+      approval_json:
+        description: Schema-2 candidate and matching downstream preflight approval JSON
+        required: true
+        type: string
+      integration_pr:
+        description: Reviewed Integration PR merged into dev with successful normal CI
         required: true
         type: string
       correlation_id:
@@ -22,6 +26,7 @@ permissions:
 
 jobs:
   promote:
+    if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
     steps:
       - name: Validate promotion inputs
@@ -29,7 +34,6 @@ jobs:
         shell: bash
         env:
           INTEGRATION_SHA: ${{ inputs.integration_sha }}
-          WSS_RELEASE_TAG: ${{ inputs.wss_release_tag }}
           CORRELATION_ID: ${{ inputs.correlation_id }}
         run: |
           set -euo pipefail
@@ -37,13 +41,8 @@ jobs:
             echo "integration_sha must be exactly 40 hexadecimal characters." >&2
             exit 1
           fi
-          if [[ -z "${WSS_RELEASE_TAG//[[:space:]]/}" || -z "${CORRELATION_ID//[[:space:]]/}" ]]; then
-            echo "wss_release_tag and correlation_id must be non-empty." >&2
-            exit 1
-          fi
-          if [[ "$WSS_RELEASE_TAG" == *$'\n'* || "$WSS_RELEASE_TAG" == *$'\r'* \
-            || "$CORRELATION_ID" == *$'\n'* || "$CORRELATION_ID" == *$'\r'* ]]; then
-            echo "wss_release_tag and correlation_id must each fit on one line." >&2
+          if [[ ! "$CORRELATION_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$ ]]; then
+            echo "Invalid single-line correlation_id." >&2
             exit 1
           fi
           integration_sha="${INTEGRATION_SHA,,}"
@@ -58,27 +57,32 @@ jobs:
           app-id: ${{ vars.WSS_GITHUB_APP_ID }}
           private-key: ${{ secrets.WSS_GITHUB_APP_PRIVATE_KEY }}
           owner: cwru-non-academic
-          repositories: CSharp_WSS_Integration_Lib
+          repositories: |
+            WSSCore
+            CSharp_WSS_Integration_Lib
+            CLI_CSharp_WSS_Application
           permission-contents: read
-
-      - name: Create CLI promotion token
-        id: cli-token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ vars.WSS_GITHUB_APP_ID }}
-          private-key: ${{ secrets.WSS_GITHUB_APP_PRIVATE_KEY }}
-          owner: cwru-non-academic
-          repositories: CLI_CSharp_WSS_Application
-          permission-contents: write
-          permission-pull-requests: write
+          permission-actions: read
+          permission-pull-requests: read
 
       - name: Check out current CLI dev
+        id: cli-base
         uses: actions/checkout@v4
         with:
           ref: dev
           fetch-depth: 0
-          token: ${{ steps.cli-token.outputs.token }}
-          persist-credentials: true
+          token: ${{ steps.integration-token.outputs.token }}
+          persist-credentials: false
+
+      - name: Check out trusted Integration dev promotion tools
+        uses: actions/checkout@v4
+        with:
+          repository: cwru-non-academic/CSharp_WSS_Integration_Lib
+          ref: dev
+          path: .promotion-tools
+          fetch-depth: 0
+          token: ${{ steps.integration-token.outputs.token }}
+          persist-credentials: false
 
       - name: Verify canonical submodule configuration
         shell: bash
@@ -96,6 +100,7 @@ jobs:
         with:
           repository: cwru-non-academic/CSharp_WSS_Integration_Lib
           ref: ${{ steps.inputs.outputs.integration_sha }}
+          fetch-depth: 0
           path: SubModules/HFI_WSS_Csharp_Implementation
           token: ${{ steps.integration-token.outputs.token }}
           persist-credentials: false
@@ -123,6 +128,51 @@ jobs:
             exit 1
           fi
 
+      - name: Validate universal approval and merged Integration state
+        id: approval
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.integration-token.outputs.token }}
+          APPROVAL_JSON: ${{ inputs.approval_json }}
+          INTEGRATION_SHA: ${{ steps.inputs.outputs.integration_sha }}
+          INTEGRATION_PR: ${{ inputs.integration_pr }}
+        run: |
+          $path = 'SubModules/HFI_WSS_Csharp_Implementation'
+          # Never execute validation code from the caller-nominated commit.
+          . ./.promotion-tools/.github/scripts/WssPromotion.ps1
+          $env:APPROVAL_JSON | Set-Content "$env:RUNNER_TEMP/approval.json"
+          $approval = Read-WssApproval "$env:RUNNER_TEMP/approval.json"
+          Write-WssApproval $approval "$env:RUNNER_TEMP/approval.json"
+          Assert-WssApproval $approval "$env:RUNNER_TEMP/evidence"
+          $null = Assert-WssMergedIntegration $env:INTEGRATION_SHA $env:INTEGRATION_PR $approval
+          Assert-WssSource '.' $approval.cli.source_sha
+          Assert-WssSource $path $approval.integration.source_sha
+          & ./.promotion-tools/.github/scripts/Resolve-WssRelease.ps1 -RunId $approval.candidate.run_id -ProducerRepository $approval.candidate.repository -ExpectedCommit $approval.candidate.commit -ArchiveName $approval.candidate.archive -ExpectedSha256 $approval.candidate.sha256 -OutputRoot "$env:RUNNER_TEMP/wss-release"
+          Assert-WssCandidateRecord (Get-Content "$env:RUNNER_TEMP/wss-release/candidate.json" -Raw | ConvertFrom-Json) $approval
+          Assert-WssLib "$path/lib" "$env:RUNNER_TEMP/wss-release/extracted/WSS-Universal" $approval
+          "marker=$(Get-WssApprovalMarker $approval)" >> $env:GITHUB_OUTPUT
+          "candidate_id=$($approval.candidate.run_id)" >> $env:GITHUB_OUTPUT
+
+      - name: Create CLI promotion token after authority checks
+        id: cli-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.WSS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.WSS_GITHUB_APP_PRIVATE_KEY }}
+          owner: cwru-non-academic
+          repositories: CLI_CSharp_WSS_Application
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Bind authoring credentials to the verified CLI base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.cli-base.outputs.commit }}
+          fetch-depth: 0
+          clean: false
+          token: ${{ steps.cli-token.outputs.token }}
+          persist-credentials: true
+
       - name: Check for an existing promotion PR
         id: duplicate
         shell: bash
@@ -130,7 +180,8 @@ jobs:
           GH_TOKEN: ${{ steps.cli-token.outputs.token }}
           BRANCH_NAME: ${{ steps.inputs.outputs.branch }}
           EXPECTED_SHA: ${{ steps.inputs.outputs.integration_sha }}
-          WSS_RELEASE_TAG: ${{ inputs.wss_release_tag }}
+          APPROVAL_MARKER: ${{ steps.approval.outputs.marker }}
+          INTEGRATION_PR: ${{ inputs.integration_pr }}
           CORRELATION_ID: ${{ inputs.correlation_id }}
         run: |
           set -euo pipefail
@@ -141,6 +192,7 @@ jobs:
             -f base=dev \
             -f "head=cwru-non-academic:$BRANCH_NAME")"
           pr_url="$(jq -r '.[0].html_url // empty' <<< "$pr_json")"
+          if [[ "$(jq length <<< "$pr_json")" -gt 1 ]]; then echo 'Ambiguous promotion PRs.' >&2; exit 1; fi
           if [[ -n "$pr_url" ]]; then
             pr_body="$(jq -r '.[0].body // empty' <<< "$pr_json")"
             base_oid="$(jq -r '.[0].base.sha' <<< "$pr_json")"
@@ -165,9 +217,10 @@ jobs:
               echo "Existing promotion PR is not an exact gitlink-only promotion for the supplied Integration SHA." >&2
               exit 1
             fi
-            if ! grep -Fqx -- "- WSS release tag: \`$WSS_RELEASE_TAG\`" <<< "$pr_body" \
+            if ! grep -Fqx -- "$APPROVAL_MARKER" <<< "$pr_body" \
+              || ! grep -Fqx -- "- Integration PR: #$INTEGRATION_PR" <<< "$pr_body" \
               || ! grep -Fqx -- "- Correlation ID: \`$CORRELATION_ID\`" <<< "$pr_body"; then
-              echo "Existing promotion PR metadata does not match the supplied release tag and correlation ID." >&2
+              echo "Existing promotion PR metadata does not match the approved candidate, merged Integration PR and correlation ID." >&2
               exit 1
             fi
             echo "Promotion PR already exists: $pr_url"
@@ -185,11 +238,15 @@ jobs:
           BRANCH_NAME: ${{ steps.inputs.outputs.branch }}
         run: |
           set -euo pipefail
-          if gh api \
-            "repos/cwru-non-academic/CLI_CSharp_WSS_Application/git/ref/heads/$BRANCH_NAME" \
-            --silent 2>/dev/null; then
+          if git ls-remote --exit-code --heads origin "refs/heads/$BRANCH_NAME" >/dev/null; then
             echo "Remote branch $BRANCH_NAME already exists without a matching open PR; refusing to overwrite it." >&2
             exit 1
+          else
+            probe_status=$?
+            if [[ "$probe_status" -ne 2 ]]; then
+              echo "Remote branch lookup failed ($probe_status); refusing to treat API/auth errors as absence." >&2
+              exit 1
+            fi
           fi
 
       - name: Validate and stage the gitlink-only change
@@ -235,12 +292,12 @@ jobs:
         shell: bash
         env:
           BRANCH_NAME: ${{ steps.inputs.outputs.branch }}
-          WSS_RELEASE_TAG: ${{ inputs.wss_release_tag }}
+          CANDIDATE_ID: ${{ steps.approval.outputs.candidate_id }}
         run: |
           set -euo pipefail
           git config user.name 'wss-promotion[bot]'
           git config user.email 'wss-promotion[bot]@users.noreply.github.com'
-          git commit -m "Update CSharp WSS integration for $WSS_RELEASE_TAG"
+          git commit -m "Update CSharp WSS integration for producer run $CANDIDATE_ID"
           git push --set-upstream origin "$BRANCH_NAME"
 
       - name: Open promotion pull request
@@ -251,7 +308,9 @@ jobs:
           BRANCH_NAME: ${{ steps.inputs.outputs.branch }}
           INTEGRATION_SHA: ${{ steps.inputs.outputs.integration_sha }}
           SHORT_SHA: ${{ steps.inputs.outputs.short_sha }}
-          WSS_RELEASE_TAG: ${{ inputs.wss_release_tag }}
+          CANDIDATE_ID: ${{ steps.approval.outputs.candidate_id }}
+          APPROVAL_MARKER: ${{ steps.approval.outputs.marker }}
+          INTEGRATION_PR: ${{ inputs.integration_pr }}
           CORRELATION_ID: ${{ inputs.correlation_id }}
         run: |
           set -euo pipefail
@@ -259,7 +318,9 @@ jobs:
           cat > "$body_file" <<EOF
           ## WSS Integration promotion
 
-          - WSS release tag: \`$WSS_RELEASE_TAG\`
+          $APPROVAL_MARKER
+          - WSS producer run: \`$CANDIDATE_ID\`
+          - Integration PR: #$INTEGRATION_PR
           - Integration SHA: \`$INTEGRATION_SHA\`
           - Correlation ID: \`$CORRELATION_ID\`
 
@@ -271,7 +332,7 @@ jobs:
             --repo cwru-non-academic/CLI_CSharp_WSS_Application \
             --base dev \
             --head "$BRANCH_NAME" \
-            --title "Promote WSS $WSS_RELEASE_TAG / Integration $SHORT_SHA" \
+            --title "Promote universal WSS run $CANDIDATE_ID / Integration $SHORT_SHA" \
             --body-file "$body_file")"
           echo "Created promotion PR: $pr_url"
           echo "## Integration promotion" >> "$GITHUB_STEP_SUMMARY"

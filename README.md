@@ -164,3 +164,27 @@ gh workflow run wss-preflight.yml --ref <CLI_PREFLIGHT_REF> \
   -f wss_archive=WSS-Universal-ci.zip \
   -f wss_sha256=<ARCHIVE_SHA256>
 ```
+
+## Universal promotion bootstrap
+
+Routine `promote-integration.yml` remains gitlink-only. Dispatch on `dev` with
+`integration_sha`, `integration_pr`, schema-2 `approval_json`, and `correlation_id`.
+Validation uses trusted Integration **dev** tooling, not scripts from a caller-nominated commit.
+It requires matching successful preflights, the actual Integration PR merge SHA contained in
+`dev`, latest successful normal Integration CI, matching committed provenance, exact universal
+bytes and source compatibility. Write credentials are created only after these checks.
+Existing PR reuse remains exact-gitlink/metadata-only; branch lookup errors are not absence.
+Normal CLI CI verifies complete build/publish propagation from the committed Integration `lib/`.
+
+The first migration cannot use ordinary gitlink-only promotion because CLI source changes
+must accompany adoption. Use the explicitly pinned `Prepare-UniversalBootstrap.ps1` in the
+Integration automation worktree, with `-Repository CLI`, a clean separate CLI worktree containing
+the validated source plus reviewed automation, a new scratch directory, the **merged Integration
+PR number**, and `-Stage`. It never commits, pushes or creates PRs. Full instructions and the
+fixed approval/proof records are in Integration's README and `.github/universal-bootstrap.json`.
+
+Do not target Integration's preflight-only SHA. After the coordinated Integration PR passes
+normal CI and is manually merged, prepare the CLI source-plus-final-gitlink PR, obtain publication
+authorization, and require normal CLI CI and review before manual merge. This one-time manual
+initiation leaves the permanent Integration bot/lib-only dispatch trigger unchanged. Subsequent
+Integration merges return to that automatic dispatch and ordinary gitlink-only CLI promotion.
