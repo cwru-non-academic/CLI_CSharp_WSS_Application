@@ -176,6 +176,18 @@ bytes and source compatibility. Write credentials are created only after these c
 Existing PR reuse remains exact-gitlink/metadata-only; branch lookup errors are not absence.
 Normal CLI CI verifies complete build/publish propagation from the committed Integration `lib/`.
 
+For routine automatic updates, no operator dispatch or provenance entry is needed:
+WSSCore's trusted `dev` push runs the universal producer and all consumers, then automatically
+hands its exact run/artifact/commit/checksum to Integration's existing promotion workflow.
+That workflow runs both existing downstream preflights against the same candidate, pins
+CLI's Integration source, validates schema-2 approval, and opens a lib-only Integration PR.
+Its reviewed merge invokes the existing dispatcher above with the **actual merged**
+Integration revision, producing the gitlink-only CLI PR. Reviewed merges and normal CI
+remain mandatory; no bootstrap, auto-merge, release or manual DLL copying is involved.
+Missing/expired/mismatched evidence stops the cascade. The automatic implementation still
+requires an authorized real run to establish end-to-end acceptance; hosted CI does not
+prove physical BLE or stimulation operation.
+
 The first migration cannot use ordinary gitlink-only promotion because CLI source changes
 must accompany adoption. Use the explicitly pinned `Prepare-UniversalBootstrap.ps1` in the
 Integration automation worktree, with `-Repository CLI`, a clean separate CLI worktree containing
