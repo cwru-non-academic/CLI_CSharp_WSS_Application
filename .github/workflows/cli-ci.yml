@@ -235,6 +235,15 @@ jobs:
           dotnet build 'SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/Wss.CSharpImplementation.Tests.csproj' -c Release --no-restore -p:TreatWarningsAsErrors=true
           if ($LASTEXITCODE -ne 0) { throw 'Integration platform test build failed.' }
 
+      - name: Verify committed universal build and publish propagation
+        shell: pwsh
+        run: |
+          $integration = 'SubModules/HFI_WSS_Csharp_Implementation'
+          & "$integration/.github/scripts/Verify-WssOutput.ps1" -ArtifactRoot "$integration/lib" -OutputRoot 'src/bin/Release/net9.0'
+          dotnet publish src/CLI_CSharp_WSS_Application.csproj -c Release --no-restore -p:TreatWarningsAsErrors=true -o "$env:RUNNER_TEMP/cli-publish"
+          if ($LASTEXITCODE -ne 0) { throw 'Committed CLI publish failed.' }
+          & "$integration/.github/scripts/Verify-WssOutput.ps1" -ArtifactRoot "$integration/lib" -OutputRoot "$env:RUNNER_TEMP/cli-publish"
+
       - name: Run platform runtime smoke checks
         shell: pwsh
         run: |

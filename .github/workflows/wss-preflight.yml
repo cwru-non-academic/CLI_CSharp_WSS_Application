@@ -1,151 +1,132 @@
 name: WSS CLI preflight
-run-name: WSS preflight ${{ inputs.wss_release_tag || 'default' }} / ${{ inputs.correlation_id || 'manual' }}
+run-name: WSS preflight ${{ inputs.wss_run_id || inputs.wss_release_tag }} / ${{ inputs.correlation_id || 'manual' }}
 
 on:
   workflow_dispatch:
     inputs:
       wss_release_tag:
-        description: WSSCore release tag; leave empty to use the workflow default
+        description: Published universal release tag (mutually exclusive with run ID)
         required: false
         type: string
       correlation_id:
         description: Cross-repository promotion correlation identifier
         required: false
         type: string
+      integration_sha:
+        description: Full Integration source SHA; empty uses the committed submodule
+        type: string
+      wss_producer_repository:
+        description: Authoritative producer repository
+        default: cwru-non-academic/WSSCore
+        type: string
+      wss_run_id:
+        description: Exact successful artifacts.yml run ID (no PR merge-ref artifacts)
+        type: string
+      wss_commit:
+        description: Expected full producer commit SHA
+        required: true
+        type: string
+      wss_archive:
+        description: Universal ZIP filename
+        default: WSS-Universal-ci.zip
+        required: true
+        type: string
+      wss_sha256:
+        description: Expected universal ZIP SHA-256
+        required: true
+        type: string
 
 permissions:
   contents: read
 
-env:
-  DEFAULT_WSS_RELEASE_TAG: v0.3.0-rc.12
-
 jobs:
   provenance:
-    name: WSS release artifact provenance
+    name: WSS universal candidate provenance
     runs-on: ubuntu-latest
     outputs:
-      release-tag: ${{ steps.release.outputs.tag }}
+      integration-sha: ${{ steps.integration.outputs.sha }}
     steps:
-      - name: Resolve WSS release tag
-        id: release
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Resolve Integration source revision
+        id: integration
         shell: pwsh
         env:
-          REQUESTED_WSS_RELEASE_TAG: ${{ inputs.wss_release_tag }}
+          REQUESTED_SHA: ${{ inputs.integration_sha }}
           CORRELATION_ID: ${{ inputs.correlation_id }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $requestedTag = [string] $env:REQUESTED_WSS_RELEASE_TAG
-          $tag = $requestedTag.Trim()
-          if ([string]::IsNullOrWhiteSpace($tag)) {
-            $tag = $env:DEFAULT_WSS_RELEASE_TAG
+          $sha = $env:REQUESTED_SHA
+          if ([string]::IsNullOrEmpty($sha)) {
+            $sha = (& git rev-parse 'HEAD:SubModules/HFI_WSS_Csharp_Implementation').Trim()
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve committed Integration SHA.' }
           }
-          if ([string]::IsNullOrWhiteSpace($tag)) {
-            throw 'The resolved WSS release tag is empty.'
-          }
-
-          "tag=$tag" >> $env:GITHUB_OUTPUT
-          "WSS_RELEASE_TAG=$tag" >> $env:GITHUB_ENV
-          "WSS_CORE_ARCHIVE_NAME=WSS-Core-$tag.zip" >> $env:GITHUB_ENV
-          "WSS_BLE_ARCHIVE_NAME=WSS-BLE-Unified-$tag.zip" >> $env:GITHUB_ENV
-          "Resolved WSS release tag: $tag"
-
-          "## WSS CLI preflight" >> $env:GITHUB_STEP_SUMMARY
-          "- Resolved release tag: ``$tag``" >> $env:GITHUB_STEP_SUMMARY
-          if (-not [string]::IsNullOrWhiteSpace($env:CORRELATION_ID)) {
-            "- Correlation ID: ``$($env:CORRELATION_ID)``" >> $env:GITHUB_STEP_SUMMARY
-          }
-
-      - name: Download, verify, and extract WSS release artifacts
+          if ($sha -notmatch '^[0-9a-fA-F]{40}$') { throw 'integration_sha must be a full commit SHA.' }
+          if ($env:CORRELATION_ID.Length -gt 200 -or $env:CORRELATION_ID -match "[\r\n]") { throw 'Invalid correlation ID.' }
+          "sha=$($sha.ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "CLI SHA: $env:GITHUB_SHA; Integration SHA: $sha; correlation: $env:CORRELATION_ID" >> $env:GITHUB_STEP_SUMMARY
+      - name: Create read-only Integration checkout token
+        id: integration-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.WSS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.WSS_GITHUB_APP_PRIVATE_KEY }}
+          owner: cwru-non-academic
+          repositories: CSharp_WSS_Integration_Lib
+          permission-contents: read
+      - uses: actions/checkout@v4
+        with:
+          repository: cwru-non-academic/CSharp_WSS_Integration_Lib
+          ref: ${{ steps.integration.outputs.sha }}
+          path: SubModules/HFI_WSS_Csharp_Implementation
+          token: ${{ steps.integration-token.outputs.token }}
+          persist-credentials: false
+      - name: Verify selected Integration source
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ steps.integration.outputs.sha }}
         run: |
-          $ErrorActionPreference = 'Stop'
-
-          function Assert-FileExists([string] $Path) {
-            if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-              throw "Required file is missing: $Path"
-            }
+          $actual = (& git -C SubModules/HFI_WSS_Csharp_Implementation rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actual -ne $env:EXPECTED_SHA) { throw 'Selected Integration checkout mismatch.' }
+          if (-not (Test-Path -LiteralPath 'SubModules/HFI_WSS_Csharp_Implementation/.github/scripts/Universal-WssFiles.ps1')) {
+            throw 'Selected Integration source predates universal preflight support. Supply integration_sha for the updated source; no newer source will be silently substituted.'
           }
-
-          function Assert-DirectoryHasFiles([string] $Path) {
-            if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
-              throw "Required directory is missing: $Path"
-            }
-            if (@(Get-ChildItem -LiteralPath $Path -File -Recurse).Count -eq 0) {
-              throw "Required directory contains no files: $Path"
-            }
-          }
-
-          $downloadDir = Join-Path $env:RUNNER_TEMP "wss-downloads/$env:WSS_RELEASE_TAG"
-          $coreArtifactDir = Join-Path $env:RUNNER_TEMP 'verified-wss-core'
-          $bleArtifactDir = Join-Path $env:RUNNER_TEMP 'verified-wss-ble'
-          New-Item -ItemType Directory -Force -Path $downloadDir, $coreArtifactDir, $bleArtifactDir | Out-Null
-
-          & gh release download $env:WSS_RELEASE_TAG `
-            --repo cwru-non-academic/WSSCore `
-            --pattern $env:WSS_CORE_ARCHIVE_NAME `
-            --pattern $env:WSS_BLE_ARCHIVE_NAME `
-            --pattern SHA256SUMS.txt `
-            --dir $downloadDir
-          if ($LASTEXITCODE -ne 0) {
-            throw "WSS release download failed with exit code $LASTEXITCODE."
-          }
-
-          $checksumsPath = Join-Path $downloadDir 'SHA256SUMS.txt'
-          Assert-FileExists $checksumsPath
-          $checksumText = Get-Content -LiteralPath $checksumsPath -Raw
-          foreach ($archiveName in @($env:WSS_CORE_ARCHIVE_NAME, $env:WSS_BLE_ARCHIVE_NAME)) {
-            $archivePath = Join-Path $downloadDir $archiveName
-            Assert-FileExists $archivePath
-            $escapedName = [Regex]::Escape($archiveName)
-            $checksumMatches = [Regex]::Matches(
-              $checksumText,
-              "(?m)^(?<hash>[0-9a-fA-F]{64})\s+\*?$escapedName\r?$"
-            )
-            if ($checksumMatches.Count -ne 1) {
-              throw "SHA256SUMS.txt must contain exactly one valid checksum entry for $archiveName; found $($checksumMatches.Count)."
-            }
-            $expectedSha = $checksumMatches[0].Groups['hash'].Value
-            $actualSha = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash
-            if (-not $actualSha.Equals($expectedSha, [StringComparison]::OrdinalIgnoreCase)) {
-              throw "SHA-256 mismatch for $archiveName. Expected $expectedSha; actual $actualSha."
-            }
-            "Verified $archiveName SHA256: $actualSha"
-          }
-
-          Expand-Archive -LiteralPath (Join-Path $downloadDir $env:WSS_CORE_ARCHIVE_NAME) -DestinationPath $coreArtifactDir -Force
-          Expand-Archive -LiteralPath (Join-Path $downloadDir $env:WSS_BLE_ARCHIVE_NAME) -DestinationPath $bleArtifactDir -Force
-
-          Assert-FileExists (Join-Path $coreArtifactDir 'WSS_Core_Interface.dll')
-          Assert-FileExists (Join-Path $bleArtifactDir 'WSS.Transport.BLE.dll')
-          foreach ($requiredFile in @(
-            'backends/windows/WSS.Transport.BLE.Windows.dll',
-            'backends/windows/Microsoft.Windows.SDK.NET.dll',
-            'backends/windows/WinRT.Runtime.dll',
-            'backends/linux/WSS.Transport.BLE.Linux.dll',
-            'backends/linux/Linux.Bluetooth.dll',
-            'backends/linux/Tmds.DBus.dll'
-          )) {
-            Assert-FileExists (Join-Path $bleArtifactDir $requiredFile)
-          }
-          foreach ($runtimeTree in @('runtimes/win', 'runtimes/unix', 'runtimes/linux-x64')) {
-            Assert-DirectoryHasFiles (Join-Path $bleArtifactDir $runtimeTree)
-          }
-
-      - name: Upload verified WSS Core artifact
+      - name: Create producer read token
+        id: core-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.WSS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.WSS_GITHUB_APP_PRIVATE_KEY }}
+          owner: cwru-non-academic
+          repositories: WSSCore
+          permission-contents: read
+          permission-actions: read
+      - name: Download, verify, and extract universal candidate
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.core-token.outputs.token }}
+          PRODUCER_REPOSITORY: ${{ inputs.wss_producer_repository }}
+          RUN_ID: ${{ inputs.wss_run_id }}
+          EXPECTED_COMMIT: ${{ inputs.wss_commit }}
+          ARCHIVE: ${{ inputs.wss_archive }}
+          SHA256: ${{ inputs.wss_sha256 }}
+          RELEASE_TAG: ${{ inputs.wss_release_tag }}
+        run: |
+          ./SubModules/HFI_WSS_Csharp_Implementation/.github/scripts/Resolve-WssRelease.ps1 -ProducerRepository $env:PRODUCER_REPOSITORY -RunId $env:RUN_ID -ReleaseTag $env:RELEASE_TAG -ExpectedCommit $env:EXPECTED_COMMIT -ArchiveName $env:ARCHIVE -ExpectedSha256 $env:SHA256 -OutputRoot "$env:RUNNER_TEMP/wss-release"
+      - name: Upload verified universal artifact
         uses: actions/upload-artifact@v4
         with:
-          name: verified-wss-core
-          path: ${{ runner.temp }}/verified-wss-core
+          name: verified-wss-universal
+          path: ${{ runner.temp }}/wss-release/extracted/WSS-Universal
           if-no-files-found: error
           retention-days: 1
 
-      - name: Upload verified WSS BLE artifact
+      - name: Upload candidate provenance
         uses: actions/upload-artifact@v4
         with:
-          name: verified-wss-ble
-          path: ${{ runner.temp }}/verified-wss-ble
+          name: wss-candidate-provenance
+          path: ${{ runner.temp }}/wss-release/candidate.json
           if-no-files-found: error
           retention-days: 1
 
@@ -154,8 +135,8 @@ jobs:
     needs: provenance
     runs-on: ubuntu-latest
     env:
-      WSS_ARTIFACT_DIR: ${{ github.workspace }}/.wss-artifacts/core
-      WSS_BLE_ARTIFACT_DIR: ${{ github.workspace }}/.wss-artifacts/ble
+      WSS_ARTIFACT_DIR: ${{ github.workspace }}/.wss-artifacts/universal
+      WSS_BLE_ARTIFACT_DIR: ${{ github.workspace }}/.wss-artifacts/universal
     steps:
       - name: Create read-only Integration checkout token
         id: integration-token
@@ -172,14 +153,16 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Resolve committed Integration SHA
+      - name: Resolve selected Integration SHA
         id: integration
         shell: pwsh
+        env:
+          SELECTED_SHA: ${{ needs.provenance.outputs.integration-sha }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $sha = (& git rev-parse 'HEAD:SubModules/HFI_WSS_Csharp_Implementation').Trim()
-          if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{40}$') {
-            throw 'Unable to resolve the committed Integration submodule SHA.'
+          $sha = $env:SELECTED_SHA
+          if ($sha -notmatch '^[0-9a-f]{40}$') {
+            throw 'Unable to resolve the selected Integration SHA.'
           }
           "sha=$sha" >> $env:GITHUB_OUTPUT
 
@@ -209,17 +192,11 @@ jobs:
             throw "Unexpected Integration remote: $remoteUrl"
           }
 
-      - name: Download verified WSS Core artifact
+      - name: Download verified universal artifact
         uses: actions/download-artifact@v4
         with:
-          name: verified-wss-core
+          name: verified-wss-universal
           path: ${{ env.WSS_ARTIFACT_DIR }}
-
-      - name: Download verified WSS BLE artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: verified-wss-ble
-          path: ${{ env.WSS_BLE_ARTIFACT_DIR }}
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -338,8 +315,8 @@ jobs:
           - os: macos-latest
             label: macOS
     env:
-      WSS_ARTIFACT_DIR: ${{ github.workspace }}/.wss-artifacts/core
-      WSS_BLE_ARTIFACT_DIR: ${{ github.workspace }}/.wss-artifacts/ble
+      WSS_ARTIFACT_DIR: ${{ github.workspace }}/.wss-artifacts/universal
+      WSS_BLE_ARTIFACT_DIR: ${{ github.workspace }}/.wss-artifacts/universal
     steps:
       - name: Create read-only Integration checkout token
         id: integration-token
@@ -356,14 +333,16 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Resolve committed Integration SHA
+      - name: Resolve selected Integration SHA
         id: integration
         shell: pwsh
+        env:
+          SELECTED_SHA: ${{ needs.provenance.outputs.integration-sha }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $sha = (& git rev-parse 'HEAD:SubModules/HFI_WSS_Csharp_Implementation').Trim()
-          if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{40}$') {
-            throw 'Unable to resolve the committed Integration submodule SHA.'
+          $sha = $env:SELECTED_SHA
+          if ($sha -notmatch '^[0-9a-f]{40}$') {
+            throw 'Unable to resolve the selected Integration SHA.'
           }
           "sha=$sha" >> $env:GITHUB_OUTPUT
 
@@ -393,17 +372,11 @@ jobs:
             throw "Unexpected Integration remote: $remoteUrl"
           }
 
-      - name: Download verified WSS Core artifact
+      - name: Download verified universal artifact
         uses: actions/download-artifact@v4
         with:
-          name: verified-wss-core
+          name: verified-wss-universal
           path: ${{ env.WSS_ARTIFACT_DIR }}
-
-      - name: Download verified WSS BLE artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: verified-wss-ble
-          path: ${{ env.WSS_BLE_ARTIFACT_DIR }}
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -487,6 +460,14 @@ jobs:
           Assert-TreePropagated $env:WSS_BLE_ARTIFACT_DIR 'runtimes/win'
           Assert-TreePropagated $env:WSS_BLE_ARTIFACT_DIR 'runtimes/unix'
           Assert-TreePropagated $env:WSS_BLE_ARTIFACT_DIR 'runtimes/linux-x64'
+
+      - name: Verify complete universal build and publish propagation
+        shell: pwsh
+        run: |
+          ./SubModules/HFI_WSS_Csharp_Implementation/.github/scripts/Verify-WssOutput.ps1 -ArtifactRoot $env:WSS_ARTIFACT_DIR -OutputRoot 'src/bin/Release/net9.0'
+          dotnet publish src/CLI_CSharp_WSS_Application.csproj -c Release --no-restore -p:TreatWarningsAsErrors=true "-p:WSS_ARTIFACT_DIR=$env:WSS_ARTIFACT_DIR" "-p:WSS_BLE_ARTIFACT_DIR=$env:WSS_BLE_ARTIFACT_DIR" -o "$env:RUNNER_TEMP/cli-publish"
+          if ($LASTEXITCODE -ne 0) { throw 'CLI publish failed.' }
+          ./SubModules/HFI_WSS_Csharp_Implementation/.github/scripts/Verify-WssOutput.ps1 -ArtifactRoot $env:WSS_ARTIFACT_DIR -OutputRoot "$env:RUNNER_TEMP/cli-publish"
 
       - name: Run platform runtime smoke checks
         shell: pwsh

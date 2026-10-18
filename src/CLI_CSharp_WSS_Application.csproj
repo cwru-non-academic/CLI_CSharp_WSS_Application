@@ -13,6 +13,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\SubModules\HFI_WSS_Csharp_Implementation\src\Wss.CSharpImplementation.csproj" />
+    <Reference Include="WSS.Transport.Serial" Condition="'$(WSS_ARTIFACT_DIR)' != '' Or Exists('$(WssArtifactDir)/WSS.Transport.Serial.dll')">
+      <HintPath>$(WssArtifactDir)\WSS.Transport.Serial.dll</HintPath>
+    </Reference>
     <Reference Include="WSS_Core_Interface">
       <HintPath>$(WssArtifactDir)\WSS_Core_Interface.dll</HintPath>
     </Reference>
