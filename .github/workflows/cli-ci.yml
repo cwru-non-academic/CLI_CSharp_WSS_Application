@@ -11,6 +11,16 @@ permissions:
   contents: read
 
 jobs:
+  release-receipt-contracts:
+    name: Release receipt safety contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - shell: pwsh
+        run: ./.github/scripts/tests/WssReleaseReceipt.Tests.ps1
+
   general-conformance:
     name: CLI general conformance
     runs-on: ubuntu-latest
