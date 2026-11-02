@@ -89,6 +89,7 @@ dotnet run --project src/CLI_CSharp_WSS_Application.csproj -- --transport=ble --
 - `--test`: alias for `--transport=test`
 - `--conformance`: alias for `--transport=conformance`; initialize the WSS emulator and validate initialization plus one direct analog scenario
 - `--serial-smoke`: construct and dispose the Serial transport without connecting to hardware; used for release compatibility testing
+- `--ble-smoke`: use alone to construct and dispose the platform BLE facade twice without scanning, connecting, reading configuration or writing to a device. Native ABI checks remain in the Integration platform tests.
 - `--help`: print usage information
 
 ## Config behavior
@@ -152,7 +153,9 @@ Normal CLI CI still tests the committed submodule and its committed binaries. Th
 direct Serial reference leaves that old committed state untouched while adding a direct
 reference for universal inputs. No gitlink update is part of preflight development.
 
-The platform checks cover Windows, Ubuntu, and macOS build/runtime and Serial compatibility. They verify packaged backend and runtime trees where applicable, but the macOS check does not establish BLE runtime support. These non-hardware checks do not prove communication with physical hardware.
+The platform checks cover Windows, Ubuntu, and macOS package/runtime and Serial compatibility. BLE facade loading is checked without hardware; Integration tests additionally validate the declared macOS managed/native pair, ABI `0x00010000`, registration and disconnected construction. macOS requires a 64-bit macOS 11 or newer host. These checks do not prove Bluetooth authorization, adapter availability or communication with a peripheral.
+
+Published `--conformance` runs from any working directory using its own temporary canonical configuration. `--ble-smoke` also works without locating a repository. Live modes retain the existing repository configuration default or explicit `--config=PATH`; custom targets such as `0x80` are not rewritten by these checks.
 
 After the updated source is available remotely and a verified producer run exists, use:
 
