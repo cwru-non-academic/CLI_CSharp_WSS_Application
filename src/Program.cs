@@ -26,6 +26,32 @@ internal static class Program
             return 0;
         }
 
+        if (args.Any(a => a.Equals("--ble-smoke", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (args.Length != 1)
+            {
+                Console.Error.WriteLine("Use --ble-smoke alone; it does not read configuration or connect to a device.");
+                return 2;
+            }
+            try
+            {
+                for (int cycle = 0; cycle < 2; cycle++)
+                {
+                    using var transport = new WssTransport.BleNusTransport(
+                        new WssTransport.BleNusTransportOptions { DeviceName = "ci-load-only" });
+                    if (transport.IsConnected)
+                        throw new InvalidOperationException("BLE construction unexpectedly connected.");
+                }
+                Console.WriteLine("BLE facade constructed and disposed twice; no scan, connection or writes. Native ABI is validated separately by Integration tests.");
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"BLE construction failed: {ex.Message}");
+                return 1;
+            }
+        }
+
         if (args.Any(a => a.Equals("--serial-smoke", StringComparison.OrdinalIgnoreCase)))
         {
             using (var transport = new WssTransport.SerialPortTransport(new WssTransport.SerialPortTransportOptions
@@ -82,7 +108,7 @@ internal static class Program
         string? bleDeviceName = null;
         string? bleDeviceId = null;
         int maxTries = 5;
-        string configPath = GetDefaultConfigPath();
+        string? configPath = null;
         int tickInterval = 10; // milliseconds
 
         foreach (var arg in args)
@@ -141,6 +167,7 @@ internal static class Program
         if (conformanceConfigPath != null)
             configPath = conformanceConfigPath;
 
+        configPath ??= GetDefaultConfigPath();
         configPath = Path.GetFullPath(configPath);
         Directory.CreateDirectory(configPath);
 
@@ -483,6 +510,7 @@ internal static class Program
         Console.WriteLine("  --test              Alias for --transport=test.");
         Console.WriteLine("  --conformance       Alias for --transport=conformance and run deterministic checks.");
         Console.WriteLine("  --serial-smoke      Construct and dispose the serial transport without opening hardware.");
+        Console.WriteLine("  --ble-smoke         Construct/dispose BLE twice without scanning, connecting or reading config; use alone.");
         Console.WriteLine("  --help              Show this message.");
     }
 
