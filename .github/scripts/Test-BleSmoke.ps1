@@ -31,7 +31,7 @@ if ($IsMacOS) {
 }
 $output=(& dotnet $cliPath --ble-smoke 2>&1) -join "`n"
 if ($legacyMac) {
-    if ($LASTEXITCODE -ne 1 -or $output -notmatch 'BLE construction failed' -or $output -notmatch 'not supported') { throw 'Legacy macOS BLE must fail explicitly as unsupported.' }
+    if ($LASTEXITCODE -ne 1 -or $output -notmatch 'BLE construction failed \(PlatformNotSupportedException\)') { throw "Legacy macOS BLE must fail explicitly as unsupported. Exit: $LASTEXITCODE; output: $output" }
 } elseif ($LASTEXITCODE -ne 0 -or $output -notmatch 'no scan, connection or writes') { throw 'BLE smoke must construct/dispose without entering live startup.' }
 $null=& dotnet $cliPath --ble-smoke "--config=$sentinel" 2>&1
 if ($LASTEXITCODE -ne 2 -or (Get-FileHash -LiteralPath $config).Hash -cne $hash -or @(Get-ChildItem -LiteralPath $sentinel -File).Count -ne 1) { throw 'BLE smoke must reject configuration/live options and preserve custom target 0x80.' }
