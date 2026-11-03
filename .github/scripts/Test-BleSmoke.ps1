@@ -18,8 +18,10 @@ if ($IsMacOS) {
     try {
         $mapping=$identity.Invoke($null,@('macos'))
         if ($mapping.Item1 -cne 'WSS.Transport.BLE.MacOS' -or $mapping.Item2 -cne 'Wss.Transports.Backends.MacOS.MacBleNusBackendFactory') { throw 'Unknown macOS backend mapping.' }
-    } catch [Reflection.TargetInvocationException] {
-        if ($_.Exception.InnerException -isnot [ArgumentOutOfRangeException] -or $_.Exception.InnerException.ParamName -cne 'platform') { throw }
+    } catch {
+        $cause=$_.Exception
+        while (($cause -is [Management.Automation.MethodInvocationException] -or $cause -is [Reflection.TargetInvocationException]) -and $cause.InnerException) { $cause=$cause.InnerException }
+        if ($cause -isnot [ArgumentOutOfRangeException] -or $cause.ParamName -cne 'platform') { throw }
         $legacyMac=$true
     }
     $macRoot=Join-Path (Split-Path $cliPath) 'backends/macos'
