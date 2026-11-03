@@ -478,6 +478,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'CLI help smoke check failed.' }
           & dotnet $cli --serial-smoke
           if ($LASTEXITCODE -ne 0) { throw 'CLI Serial smoke check failed.' }
+          ./.github/scripts/Test-BleSmoke.ps1 -Cli $cli -Scratch "$env:RUNNER_TEMP/ble-cli-regression"
 
       - name: Run platform-dependent Integration tests
         shell: pwsh
