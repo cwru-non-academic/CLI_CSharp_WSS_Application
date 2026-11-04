@@ -11,6 +11,16 @@ permissions:
   contents: read
 
 jobs:
+  macos_evidence_contracts:
+    name: macOS BLE evidence contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - shell: pwsh
+        run: ./.github/scripts/tests/MacOSBleEvidence.Tests.ps1
+
   release-receipt-contracts:
     name: Release receipt safety contracts
     runs-on: ubuntu-latest
@@ -156,8 +166,6 @@ jobs:
             label: Windows
           - os: ubuntu-latest
             label: Ubuntu
-          - os: macos-latest
-            label: macOS
     steps:
       - name: Create read-only Integration checkout token
         id: integration-token
@@ -275,3 +283,194 @@ jobs:
           --no-restore
           -p:TreatWarningsAsErrors=true
           --filter "FullyQualifiedName~SerialRuntimeSelectionTests|FullyQualifiedName~BleBackendLoadingTests"
+
+  macos_architecture:
+    name: macOS BLE detail (${{ matrix.cpu }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            label: macOS
+            os: macos-15-intel
+            arch: x64
+            test_platform: x64
+            cpu: Intel x86_64
+          - name: macOS
+            label: macOS
+            os: macos-15
+            arch: arm64
+            test_platform: ARM64
+            cpu: Apple Silicon arm64
+    steps:
+      - name: Create read-only Integration checkout token
+        id: integration-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.WSS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.WSS_GITHUB_APP_PRIVATE_KEY }}
+          owner: cwru-non-academic
+          repositories: CSharp_WSS_Integration_Lib
+          permission-contents: read
+
+      - name: Check out CLI
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve committed Integration SHA
+        id: integration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sha = (& git rev-parse 'HEAD:SubModules/HFI_WSS_Csharp_Implementation').Trim()
+          if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{40}$') {
+            throw 'Unable to resolve the committed Integration submodule SHA.'
+          }
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+
+      - name: Check out committed Integration submodule
+        uses: actions/checkout@v4
+        with:
+          repository: cwru-non-academic/CSharp_WSS_Integration_Lib
+          ref: ${{ steps.integration.outputs.sha }}
+          path: SubModules/HFI_WSS_Csharp_Implementation
+          token: ${{ steps.integration-token.outputs.token }}
+          persist-credentials: false
+
+      - name: Verify committed Integration checkout
+        shell: pwsh
+        env:
+          EXPECTED_INTEGRATION_SHA: ${{ steps.integration.outputs.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $integrationPath = 'SubModules/HFI_WSS_Csharp_Implementation'
+          $actualSha = (& git -C $integrationPath rev-parse HEAD).Trim()
+          $remoteUrl = (& git -C $integrationPath remote get-url origin).Trim().TrimEnd('/')
+          $normalizedRemote = $remoteUrl -replace '\.git$', ''
+          if ($actualSha -ne $env:EXPECTED_INTEGRATION_SHA) {
+            throw "Integration checkout mismatch. Expected $($env:EXPECTED_INTEGRATION_SHA); actual $actualSha."
+          }
+          if ($normalizedRemote -ne 'https://github.com/cwru-non-academic/CSharp_WSS_Integration_Lib') {
+            throw "Unexpected Integration remote: $remoteUrl"
+          }
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Verify native macOS and dotnet architecture
+        shell: pwsh
+        env:
+          DOTNET_CLI_UI_LANGUAGE: en-US
+        run: |
+          . ./.github/scripts/MacOSBleEvidence.ps1
+          Initialize-WssMacOSEvidence '${{ matrix.arch }}' 'cli-normal' "$env:RUNNER_TEMP/macos-evidence"
+      - name: Clean build outputs
+        shell: pwsh
+        run: |
+          foreach ($outputPath in @(
+            'src/bin',
+            'src/obj',
+            'SubModules/HFI_WSS_Csharp_Implementation/src/bin',
+            'SubModules/HFI_WSS_Csharp_Implementation/src/obj',
+            'SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/bin',
+            'SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/obj'
+          )) {
+            Remove-Item -LiteralPath $outputPath -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Restore committed state
+        shell: pwsh
+        run: |
+          dotnet restore CLI_CSharp_WSS_Application.sln
+          if ($LASTEXITCODE -ne 0) { throw 'CLI restore failed.' }
+          dotnet restore 'SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/Wss.CSharpImplementation.Tests.csproj'
+          if ($LASTEXITCODE -ne 0) { throw 'Integration platform test restore failed.' }
+
+      - name: Build committed state
+        shell: pwsh
+        run: |
+          dotnet build CLI_CSharp_WSS_Application.sln -c Release --no-restore -p:TreatWarningsAsErrors=true
+          if ($LASTEXITCODE -ne 0) { throw 'CLI build failed.' }
+          dotnet build 'SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/Wss.CSharpImplementation.Tests.csproj' -c Release --no-restore -p:TreatWarningsAsErrors=true
+          if ($LASTEXITCODE -ne 0) { throw 'Integration platform test build failed.' }
+
+      - name: Verify committed universal build and publish propagation
+        shell: pwsh
+        run: |
+          $integration = 'SubModules/HFI_WSS_Csharp_Implementation'
+          & "$integration/.github/scripts/Verify-WssOutput.ps1" -ArtifactRoot "$integration/lib" -OutputRoot 'src/bin/Release/net9.0'
+          dotnet publish src/CLI_CSharp_WSS_Application.csproj -c Release --no-restore -p:TreatWarningsAsErrors=true -o "$env:RUNNER_TEMP/cli-publish"
+          if ($LASTEXITCODE -ne 0) { throw 'Committed CLI publish failed.' }
+          & "$integration/.github/scripts/Verify-WssOutput.ps1" -ArtifactRoot "$integration/lib" -OutputRoot "$env:RUNNER_TEMP/cli-publish"
+
+      - name: Run platform runtime smoke checks
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cli = 'src/bin/Release/net9.0/CLI_CSharp_WSS_Application.dll'
+          & dotnet $cli --help
+          if ($LASTEXITCODE -ne 0) { throw 'CLI help smoke check failed.' }
+          & dotnet $cli --serial-smoke
+          if ($LASTEXITCODE -ne 0) { throw 'CLI Serial smoke check failed.' }
+          ./.github/scripts/Test-BleSmoke.ps1 -Cli $cli -Scratch "$env:RUNNER_TEMP/ble-cli-regression" | Tee-Object -FilePath "$env:RUNNER_TEMP/macos-cli.log"
+
+      - name: Run platform-dependent Integration tests
+        shell: pwsh
+        run: |
+          & dotnet test SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/Wss.CSharpImplementation.Tests.csproj -c Release --no-build --no-restore -p:TreatWarningsAsErrors=true --filter "FullyQualifiedName~SerialRuntimeSelectionTests|FullyQualifiedName~BleBackendLoadingTests" --logger 'console;verbosity=detailed' --logger 'trx;LogFileName=macos-platform.trx' --results-directory "$env:RUNNER_TEMP/macos-results" -- RunConfiguration.TargetPlatform=${{ matrix.test_platform }} | Tee-Object -FilePath "$env:RUNNER_TEMP/macos-platform.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical platform tests failed.' }
+
+      - name: Record canonical packaged BLE result before any synthetic fixture
+        if: always()
+        shell: pwsh
+        run: |
+          . ./.github/scripts/MacOSBleEvidence.ps1
+          Write-WssMacOSEvidence '${{ matrix.arch }}' 'cli-normal' "$env:RUNNER_TEMP/macos-evidence" "$env:RUNNER_TEMP/macos-results/macos-platform.trx" "$env:RUNNER_TEMP/macos-platform.log" 'src/bin/Release/net9.0' -CliLog "$env:RUNNER_TEMP/macos-cli.log" -IntegrationSha '${{ steps.integration.outputs.sha }}'
+
+
+      - name: Finalize architecture evidence including all worker steps
+        if: always()
+        shell: pwsh
+        env:
+          WORKER_RESULT: ${{ job.status }}
+        run: |
+          . ./.github/scripts/MacOSBleEvidence.ps1
+          Finalize-WssMacOSEvidence '${{ matrix.arch }}' 'cli-normal' "$env:RUNNER_TEMP/macos-evidence" $env:WORKER_RESULT
+      - name: Retain architecture-specific canonical evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wss-macos-cli-normal-${{ matrix.arch }}-a${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/macos-evidence/*.json
+            ${{ runner.temp }}/macos-results/*.trx
+            ${{ runner.temp }}/macos-platform.log
+            ${{ runner.temp }}/macos-cli.log
+          if-no-files-found: error
+
+  macos_compatibility:
+    name: CLI platform compatibility (macOS)
+    needs: macos_architecture
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Gather both native architecture records
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: wss-macos-cli-normal-*-a${{ github.run_attempt }}
+          path: macos-evidence
+      - name: Require Intel and Apple Silicon success and show failures separately
+        if: always()
+        shell: pwsh
+        env:
+          WORKER_RESULT: ${{ needs.macos_architecture.result }}
+        run: |
+          . ./.github/scripts/MacOSBleEvidence.ps1
+          Complete-WssMacOSGate 'macos-evidence' 'cli-normal' $env:WORKER_RESULT
