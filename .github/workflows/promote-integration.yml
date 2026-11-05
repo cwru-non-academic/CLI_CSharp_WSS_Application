@@ -29,6 +29,9 @@ jobs:
     if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - name: Validate promotion inputs
         id: inputs
         shell: bash
@@ -287,9 +290,6 @@ jobs:
           git diff --cached --check
           git diff --cached --submodule=short
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
       - name: Publish through common promotion engine
         if: steps.duplicate.outputs.reuse != 'true'
         shell: pwsh
