@@ -29,6 +29,9 @@ jobs:
     if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - name: Validate promotion inputs
         id: inputs
         shell: bash
@@ -287,56 +290,29 @@ jobs:
           git diff --cached --check
           git diff --cached --submodule=short
 
-      - name: Commit and push promotion branch
+      - name: Publish through common promotion engine
         if: steps.duplicate.outputs.reuse != 'true'
-        shell: bash
+        shell: pwsh
         env:
-          BRANCH_NAME: ${{ steps.inputs.outputs.branch }}
-          CANDIDATE_ID: ${{ steps.approval.outputs.candidate_id }}
-        run: |
-          set -euo pipefail
-          git config user.name 'wss-promotion[bot]'
-          git config user.email 'wss-promotion[bot]@users.noreply.github.com'
-          git commit -m "Update CSharp WSS integration for producer run $CANDIDATE_ID"
-          git push --set-upstream origin "$BRANCH_NAME"
-
-      - name: Open promotion pull request
-        if: steps.duplicate.outputs.reuse != 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ steps.cli-token.outputs.token }}
-          BRANCH_NAME: ${{ steps.inputs.outputs.branch }}
+          GH_TOKEN: ${{ steps.integration-token.outputs.token }}
+          WSS_PUSH_TOKEN: ${{ steps.cli-token.outputs.token }}
+          SOURCE_SHA: ${{ steps.cli-base.outputs.commit }}
           INTEGRATION_SHA: ${{ steps.inputs.outputs.integration_sha }}
-          SHORT_SHA: ${{ steps.inputs.outputs.short_sha }}
-          CANDIDATE_ID: ${{ steps.approval.outputs.candidate_id }}
-          APPROVAL_MARKER: ${{ steps.approval.outputs.marker }}
           INTEGRATION_PR: ${{ inputs.integration_pr }}
           CORRELATION_ID: ${{ inputs.correlation_id }}
+          BRANCH_NAME: ${{ steps.inputs.outputs.branch }}
         run: |
-          set -euo pipefail
-          body_file="$RUNNER_TEMP/promotion-pr-body.md"
-          cat > "$body_file" <<EOF
-          ## WSS Integration promotion
-
-          $APPROVAL_MARKER
-          - WSS producer run: \`$CANDIDATE_ID\`
-          - Integration PR: #$INTEGRATION_PR
-          - Integration SHA: \`$INTEGRATION_SHA\`
-          - Correlation ID: \`$CORRELATION_ID\`
-
-          This PR updates only the CLI Integration submodule pointer to the approved merged Integration commit.
-
-          Normal CLI PR CI will validate the committed CLI state, committed Integration submodule, and Integration's committed local \`lib/\`. CI has not yet completed; this PR makes no claim that those checks have passed.
-          EOF
-          pr_url="$(gh pr create \
-            --repo cwru-non-academic/CLI_CSharp_WSS_Application \
-            --base dev \
-            --head "$BRANCH_NAME" \
-            --title "Promote universal WSS run $CANDIDATE_ID / Integration $SHORT_SHA" \
-            --body-file "$body_file")"
-          echo "Created promotion PR: $pr_url"
-          echo "## Integration promotion" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Pull request: $pr_url" >> "$GITHUB_STEP_SUMMARY"
+          . ./.promotion-tools/.github/scripts/WssPromotion.ps1
+          $approval=Read-WssApproval "$env:RUNNER_TEMP/approval.json"
+          $marker=Get-WssApprovalMarker $approval
+          $bodyPath=Join-Path $env:RUNNER_TEMP 'promotion-pr-body.md'
+          $markers=@($marker,"- Integration PR: #$env:INTEGRATION_PR","- Correlation ID: ``$env:CORRELATION_ID``")
+          ($markers -join "`n")|Set-Content -LiteralPath $bodyPath
+          $descriptor=@{target_id='csharp-cli';repository_root=$env:GITHUB_WORKSPACE;source_sha=$env:SOURCE_SHA;candidate=$approval.candidate;branch=$env:BRANCH_NAME;allowed_paths=@('SubModules/HFI_WSS_Csharp_Implementation');markers=$markers;gitlinks=@{'SubModules/HFI_WSS_Csharp_Implementation'=$env:INTEGRATION_SHA};parent_heads=@{'cwru-non-academic/CSharp_WSS_Integration_Lib'=$env:INTEGRATION_SHA};body_path=$bodyPath;title="Promote universal WSS run $($approval.candidate.run_id)";commit_message="Update CSharp WSS integration for producer run $($approval.candidate.run_id)"}
+          $path=Join-Path $env:RUNNER_TEMP 'publication.json'
+          $descriptor|ConvertTo-Json -Depth 12|Set-Content -LiteralPath $path
+          & node ./.promotion-tools/.github/scripts/wss-ci/promotion.mjs $path
+          if($LASTEXITCODE -ne 0){throw 'Common promotion publication failed or is uncertain; inspect before retry.'}
 
       - name: Report reused promotion pull request
         if: steps.duplicate.outputs.reuse == 'true'
