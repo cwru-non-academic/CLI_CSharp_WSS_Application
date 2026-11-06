@@ -21,12 +21,16 @@ on:
         required: true
         type: string
 
+env:
+  WSS_CI_CHANNEL: ${{ github.ref_name }}
+  WSS_TARGET_ROOT: ${{ github.workspace }}
+  WSS_CORE_TOOLS_ROOT: ${{ github.workspace }}/workflow-guard
 permissions:
   contents: read
 
 jobs:
   promote:
-    if: github.ref == 'refs/heads/dev'
+    if: github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/setup-node@v4
@@ -40,6 +44,10 @@ jobs:
           CORRELATION_ID: ${{ inputs.correlation_id }}
         run: |
           set -euo pipefail
+          if [[ "$GITHUB_REF" == 'refs/heads/main' ]] && [[ "$GITHUB_EVENT_NAME" != 'workflow_dispatch' || "$GITHUB_WORKFLOW_SHA" != "$GITHUB_SHA" || "$GITHUB_WORKFLOW_REF" != "$GITHUB_REPOSITORY/.github/workflows/promote-integration.yml@refs/heads/main" ]]; then
+            echo 'Main promotion must execute its exact registered receiver workflow source.' >&2
+            exit 1
+          fi
           if [[ ! "$INTEGRATION_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "integration_sha must be exactly 40 hexadecimal characters." >&2
             exit 1
@@ -72,16 +80,29 @@ jobs:
         id: cli-base
         uses: actions/checkout@v4
         with:
-          ref: dev
+          ref: ${{ github.sha }}
           fetch-depth: 0
           token: ${{ steps.integration-token.outputs.token }}
           persist-credentials: false
 
-      - name: Check out trusted Integration dev promotion tools
+      - name: Read locked Core guard source
+        id: guard
+        shell: pwsh
+        run: |
+          $lock=Get-Content .github/scripts/wss-ci.lock.json -Raw|ConvertFrom-Json
+          if($lock.source_repository -cne 'cwru-non-academic/WSSCore' -or $lock.source_commit -cnotmatch '^[a-f0-9]{40}$' -or $lock.source_ref -cne "refs/heads/ci/tooling/$($lock.source_commit)"){throw 'Invalid immutable Core guard lock.'}
+          "commit=$($lock.source_commit)" >> $env:GITHUB_OUTPUT
+      - uses: actions/checkout@v4
+        with:
+          repository: cwru-non-academic/WSSCore
+          ref: ${{ steps.guard.outputs.commit }}
+          path: workflow-guard
+          persist-credentials: false
+      - name: Check out trusted Integration promotion tools
         uses: actions/checkout@v4
         with:
           repository: cwru-non-academic/CSharp_WSS_Integration_Lib
-          ref: dev
+          ref: 3673dbfef7b5fc00d19dd0a8d39a4762c7ff33bc
           path: .promotion-tools
           fetch-depth: 0
           token: ${{ steps.integration-token.outputs.token }}
@@ -146,7 +167,7 @@ jobs:
           $env:APPROVAL_JSON | Set-Content "$env:RUNNER_TEMP/approval.json"
           $approval = Read-WssApproval "$env:RUNNER_TEMP/approval.json"
           Write-WssApproval $approval "$env:RUNNER_TEMP/approval.json"
-          Assert-WssApproval $approval "$env:RUNNER_TEMP/evidence"
+          Assert-WssApproval $approval "$env:RUNNER_TEMP/evidence" -RequireCanonicalDev:((Get-WssCiChannel) -ceq 'main')
           $null = Assert-WssMergedIntegration $env:INTEGRATION_SHA $env:INTEGRATION_PR $approval
           Assert-WssSource '.' $approval.cli.source_sha
           Assert-WssSource $path $approval.integration.source_sha
@@ -192,7 +213,7 @@ jobs:
             repos/cwru-non-academic/CLI_CSharp_WSS_Application/pulls \
             --method GET \
             -f state=open \
-            -f base=dev \
+            -f "base=$WSS_CI_CHANNEL" \
             -f "head=cwru-non-academic:$BRANCH_NAME")"
           pr_url="$(jq -r '.[0].html_url // empty' <<< "$pr_json")"
           if [[ "$(jq length <<< "$pr_json")" -gt 1 ]]; then echo 'Ambiguous promotion PRs.' >&2; exit 1; fi
@@ -308,7 +329,7 @@ jobs:
           $bodyPath=Join-Path $env:RUNNER_TEMP 'promotion-pr-body.md'
           $markers=@($marker,"- Integration PR: #$env:INTEGRATION_PR","- Correlation ID: ``$env:CORRELATION_ID``")
           ($markers -join "`n")|Set-Content -LiteralPath $bodyPath
-          $descriptor=@{target_id='csharp-cli';repository_root=$env:GITHUB_WORKSPACE;source_sha=$env:SOURCE_SHA;candidate=$approval.candidate;branch=$env:BRANCH_NAME;allowed_paths=@('SubModules/HFI_WSS_Csharp_Implementation');markers=$markers;gitlinks=@{'SubModules/HFI_WSS_Csharp_Implementation'=$env:INTEGRATION_SHA};parent_heads=@{'cwru-non-academic/CSharp_WSS_Integration_Lib'=$env:INTEGRATION_SHA};body_path=$bodyPath;title="Promote universal WSS run $($approval.candidate.run_id)";commit_message="Update CSharp WSS integration for producer run $($approval.candidate.run_id)"}
+          $descriptor=@{channel=(Get-WssCiChannel);target_id='csharp-cli';repository_root=$env:GITHUB_WORKSPACE;source_sha=$env:SOURCE_SHA;candidate=$approval.candidate;branch=$env:BRANCH_NAME;allowed_paths=@('SubModules/HFI_WSS_Csharp_Implementation');markers=$markers;gitlinks=@{'SubModules/HFI_WSS_Csharp_Implementation'=$env:INTEGRATION_SHA};parent_heads=@{'cwru-non-academic/CSharp_WSS_Integration_Lib'=$env:INTEGRATION_SHA};body_path=$bodyPath;title="Promote universal WSS run $($approval.candidate.run_id)";commit_message="Update CSharp WSS integration for producer run $($approval.candidate.run_id)"}
           $path=Join-Path $env:RUNNER_TEMP 'publication.json'
           $descriptor|ConvertTo-Json -Depth 12|Set-Content -LiteralPath $path
           & node ./.promotion-tools/.github/scripts/wss-ci/promotion.mjs $path
