@@ -7,13 +7,31 @@ on:
       - main
   workflow_dispatch:
 
-env:
-  WSS_CI_CHANNEL: dev
 permissions:
   contents: read
 
 jobs:
+  resolve-channel:
+    name: Verified ordinary CI channel
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.channel.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Bind the channel to the actual event and workflow source
+        id: channel
+        shell: pwsh
+        run: ./.github/scripts/Resolve-OrdinaryCiChannel.ps1
+      - name: Exercise ordinary channel and workflow contracts
+        shell: pwsh
+        run: ./.github/scripts/tests/OrdinaryCiChannel.Tests.ps1
+
   receipt-policy-boundary:
+    needs: resolve-channel
+    env:
+      WSS_CI_CHANNEL: ${{ needs.resolve-channel.outputs.channel }}
     name: Receipt policy bridge (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -27,9 +45,15 @@ jobs:
           node-version: '24'
       - name: Exercise canonical policy through the actual PowerShell adapter
         shell: pwsh
+        # Dev here is only the synthetic contract fixture, never the execution channel.
+        env:
+          WSS_CI_CHANNEL: dev
         run: ./.github/scripts/tests/WssReleaseReceipt.Tests.ps1
 
   macos_evidence_contracts:
+    needs: resolve-channel
+    env:
+      WSS_CI_CHANNEL: ${{ needs.resolve-channel.outputs.channel }}
     name: macOS BLE evidence contracts
     runs-on: ubuntu-latest
     steps:
@@ -40,6 +64,9 @@ jobs:
         run: ./.github/scripts/tests/MacOSBleEvidence.Tests.ps1
 
   release-receipt-contracts:
+    needs: resolve-channel
+    env:
+      WSS_CI_CHANNEL: ${{ needs.resolve-channel.outputs.channel }}
     name: Release receipt safety contracts
     runs-on: ubuntu-latest
     steps:
@@ -50,9 +77,15 @@ jobs:
         with:
           node-version: '24'
       - shell: pwsh
+        # Dev here is only the synthetic contract fixture, never the execution channel.
+        env:
+          WSS_CI_CHANNEL: dev
         run: ./.github/scripts/tests/WssReleaseReceipt.Tests.ps1
 
   general-conformance:
+    needs: resolve-channel
+    env:
+      WSS_CI_CHANNEL: ${{ needs.resolve-channel.outputs.channel }}
     name: CLI general conformance
     runs-on: ubuntu-latest
     steps:
@@ -193,6 +226,9 @@ jobs:
         run: ./.github/scripts/Invoke-ProfileBehavior.ps1
 
   platform-compatibility:
+    needs: resolve-channel
+    env:
+      WSS_CI_CHANNEL: ${{ needs.resolve-channel.outputs.channel }}
     name: CLI platform compatibility (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -341,6 +377,9 @@ jobs:
           --filter "FullyQualifiedName~SerialRuntimeSelectionTests|FullyQualifiedName~BleBackendLoadingTests"
 
   macos_architecture:
+    needs: resolve-channel
+    env:
+      WSS_CI_CHANNEL: ${{ needs.resolve-channel.outputs.channel }}
     name: macOS BLE detail (${{ matrix.cpu }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -528,10 +567,19 @@ jobs:
 
   macos_compatibility:
     name: CLI platform compatibility (macOS)
-    needs: macos_architecture
+    needs: [resolve-channel, macos_architecture]
+    env:
+      WSS_CI_CHANNEL: ${{ needs.resolve-channel.outputs.channel }}
     if: always()
     runs-on: ubuntu-latest
     steps:
+      - name: Require successful channel resolution
+        if: always()
+        shell: pwsh
+        env:
+          CHANNEL_RESULT: ${{ needs.resolve-channel.result }}
+        run: |
+          if ($env:CHANNEL_RESULT -cne 'success' -or $env:WSS_CI_CHANNEL -cnotin @('dev', 'main')) { throw 'Ordinary channel resolution did not succeed.' }
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
