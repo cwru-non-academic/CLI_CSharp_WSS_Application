@@ -55,7 +55,9 @@ public sealed class HostedSelectedFixtureTests {
  $null=Invoke-FixtureGit $tests @('-c','user.name=Synthetic Runtime Fixture','-c','user.email=fixture@example.invalid','commit','--quiet','-m','Synthetic runtime fixture, never acceptance evidence')
  $testSha=(Invoke-FixtureGit $tests @('rev-parse','HEAD') -join '').Trim()
  Require ($testSha -cne $sha) 'Selected fixture must differ from product.'
- $payload=Join-Path $FixtureRoot 'payload';Copy-Item -LiteralPath (Join-Path $integration 'lib') -Destination $payload -Recurse
+ $payload=Join-Path $FixtureRoot 'payload';Copy-Item -LiteralPath (Join-Path $VerifiedInputRoot 'extracted/WSS-Universal') -Destination $payload -Recurse
+ @{candidate=(Get-Content (Join-Path $VerifiedInputRoot 'candidate.json') -Raw | ConvertFrom-Json)} | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $payload 'wss-candidate.json')
+ Require ((Get-FileHash (Join-Path $integration 'lib/WSS_Core_Interface.dll')).Hash -cne (Get-FileHash (Join-Path $payload 'WSS_Core_Interface.dll')).Hash) 'Collision regression requires different archived and authenticated candidate bytes.'
  @{schema='wss-synthetic-selected-runtime-fixture/v1';acceptance=$false;product_root=$product;product_sha=$sha;integration_root=$integration;integration_sha=$integrationSha;baseline_test_root=$baselineTests;test_root=$tests;test_sha=$testSha;test_seed_sha=$seedSha;payload_root=$payload;selection_id=('a'*64)} | ConvertTo-Json | Set-Content (Join-Path $FixtureRoot 'fixture.json')
  foreach($entry in @{WSS_FIXTURE_ROOT=$FixtureRoot;WSS_FIXTURE_PRODUCT=$product;WSS_FIXTURE_INTEGRATION=$integration;WSS_FIXTURE_PAYLOAD=$payload}.GetEnumerator()){
   Require ($entry.Value -notmatch '[\r\n]') 'Invalid fixture workflow path.'
@@ -80,6 +82,7 @@ try{
  foreach($name in $names){$prior[$name]=[Environment]::GetEnvironmentVariable($name);[Environment]::SetEnvironmentVariable($name,'synthetic-parent-only')}
  Invoke-CredentialFreeSelectedPowerShell "$scripts/Invoke-ProfileFullTests.ps1" @{EvidencePath=$profilePath;ResultsDirectory=$baseline}
  Assert-PreparedProfileProof $proof
+ & (Join-Path $state.integration_root '.github/scripts/Verify-WssOutput.ps1') -ArtifactRoot $state.payload_root -OutputRoot (Join-Path $proof.state.output_root 'Release/net9.0')
  $baselineRoots=@($proof.state.output_root,$baseline)
  $baselineSnapshot=New-TrustedBaselineSnapshot $baselineRoots
  function Assert-BaselineFiles {Assert-TrustedBaselineSnapshot $baselineSnapshot}

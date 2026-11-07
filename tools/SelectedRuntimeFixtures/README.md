@@ -16,3 +16,15 @@ wss-selected-tests evidence. Main test sources run against a compatible modern
 Integration product, not an unmodified legacy payload. Ordinary main coverage
 remains separate. No policy activation, App grant changes or local blocked-runtime
 retries occur. Selected executors never receive the App private key or token.
+
+## Cross-payload resolution regression
+
+Modern fixtures authenticate producer run 42362522777, artifact 13570163970,
+Core bb52ac3f3507635a7d434657ed631ffe186db694, universal archive SHA256
+c3d6f8e50c8b9ca7bc13b21fa62cade8818046ce3a29aa02828a1907d083051e.
+The immutable source retains its older committed lib. Preparation requires the
+archived and candidate Core DLL hashes to differ. Generated tests must resolve
+and propagate the authenticated candidate, with the existing full universal
+inventory/projection validator unchanged. Successful compilation alone is not
+proof. All existing hosted mandatory behavioral and selected runtime checks
+remain required. These fixtures are synthetic diagnostics, not campaign evidence.
