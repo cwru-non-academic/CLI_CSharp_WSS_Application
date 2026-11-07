@@ -1,0 +1,5 @@
+{
+  "test_directory": "tests/Wss.Cli.Tests",
+  "schema": "wss-csharp-tests/v1",
+  "role": "cli"
+}
