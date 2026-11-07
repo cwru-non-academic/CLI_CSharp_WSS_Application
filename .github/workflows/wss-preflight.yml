@@ -119,6 +119,33 @@ jobs:
           RELEASE_TAG: ${{ inputs.wss_release_tag }}
         run: |
           ./SubModules/HFI_WSS_Csharp_Implementation/.github/scripts/Resolve-WssRelease.ps1 -ProducerRepository $env:PRODUCER_REPOSITORY -RunId $env:RUN_ID -ReleaseTag $env:RELEASE_TAG -ExpectedCommit $env:EXPECTED_COMMIT -ArchiveName $env:ARCHIVE -ExpectedSha256 $env:SHA256 -OutputRoot "$env:RUNNER_TEMP/wss-release"
+      - name: Read locked Core package verifier source
+        id: package-tools
+        shell: pwsh
+        run: |
+          $lock = Get-Content .github/scripts/wss-ci.lock.json -Raw | ConvertFrom-Json
+          if ($lock.source_repository -cne 'cwru-non-academic/WSSCore' -or $lock.source_commit -cnotmatch '^[a-f0-9]{40}$' -or $lock.source_ref -cne "refs/heads/ci/tooling/$($lock.source_commit)") { throw 'Invalid immutable Core package verifier lock.' }
+          "commit=$($lock.source_commit)" >> $env:GITHUB_OUTPUT
+      - uses: actions/checkout@v4
+        with:
+          repository: cwru-non-academic/WSSCore
+          ref: ${{ steps.package-tools.outputs.commit }}
+          path: workflow-guard
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify exact universal package and Core rejection fixtures
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & dotnet build workflow-guard/tools/ArtifactBuild/ArtifactBuild.csproj -p:RestoreLockedMode=true --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Locked Core package verifier build failed.' }
+          & python workflow-guard/tests/Packaging/verify_universal.py "$env:RUNNER_TEMP/wss-release/extracted/WSS-Universal"
+          if ($LASTEXITCODE -ne 0) { throw 'Exact universal package or Core rejection fixture failed.' }
       - name: Upload verified universal artifact
         uses: actions/upload-artifact@v4
         with:
