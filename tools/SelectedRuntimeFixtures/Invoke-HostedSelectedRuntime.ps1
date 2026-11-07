@@ -71,6 +71,7 @@ $scripts=Join-Path $AdapterRoot '.github/scripts'
 . "$scripts/CSharpProfilesBootstrap.ps1"
 . "$scripts/CSharpTestSource.ps1"
 . "$scripts/PreparedProfileProof.ps1"
+. "$scripts/TrustedBaseline.ps1"
 $profilePath=Join-Path $FixtureRoot 'profile/profile.json'
 $proof=New-PreparedProfileProof $profilePath $state.payload_root $state.integration_root $state.integration_sha $true
 $baseline=Join-Path $FixtureRoot 'baseline-results'
@@ -79,8 +80,9 @@ try{
  foreach($name in $names){$prior[$name]=[Environment]::GetEnvironmentVariable($name);[Environment]::SetEnvironmentVariable($name,'synthetic-parent-only')}
  Invoke-CredentialFreeSelectedPowerShell "$scripts/Invoke-ProfileFullTests.ps1" @{EvidencePath=$profilePath;ResultsDirectory=$baseline}
  Assert-PreparedProfileProof $proof
- $baselineFiles=@(Get-ChildItem $proof.state.output_root,$baseline -Recurse -File | ForEach-Object {@{path=$_.FullName;hash=(Get-FileHash $_.FullName -Algorithm SHA256).Hash}})
- function Assert-BaselineFiles {foreach($file in $baselineFiles){Require ((Get-FileHash $file.path -Algorithm SHA256).Hash -ceq $file.hash) 'Selected suite modified baseline output/results.'}}
+ $baselineRoots=@($proof.state.output_root,$baseline)
+ $baselineSnapshot=New-TrustedBaselineSnapshot $baselineRoots
+ function Assert-BaselineFiles {Assert-TrustedBaselineSnapshot $baselineSnapshot}
  function SelectedOptions([string]$Name){@{Role='cli';IntegrationRoot=$state.integration_root;IntegrationSha=$state.integration_sha;ProductRoot=$state.product_root;ProductSha=$state.product_sha;PayloadRoot=$state.payload_root;WorkRoot=(Join-Path $FixtureRoot $Name);TestRoot=$state.test_root;TestSha=$state.test_sha;TestRepository='cwru-non-academic/CLI_CSharp_WSS_Application';TestSelectionId=$state.selection_id;ProfileEvidencePath=$profilePath}}
  function Assert-SelectedResults([string]$Name){
   $root=Join-Path $FixtureRoot $Name
@@ -94,15 +96,8 @@ try{
  # Independent mandatory CLI baseline uses the immutable PRODUCT-owned tests,
  # not either separately selected bundle or its poisoned configuration.
  $trustedOptions=SelectedOptions 'baseline-cli'
- $trustedOptions.TestRoot=$state.baseline_test_root
- $trustedOptions.TestSha=$state.product_sha
- $trustedOptions.TestSelectionId='b'*64
- Invoke-CredentialFreeSelectedPowerShell "$scripts/Invoke-SelectedCSharpTests.ps1" $trustedOptions
- $trustedTrx=Join-Path $FixtureRoot 'baseline-cli/commands/commands.trx'
- Assert-CSharpFullTestResults $trustedTrx
- [xml]$trustedResult=Get-Content $trustedTrx -Raw
- Require (@($trustedResult.TestRun.Results.UnitTestResult).Count -eq 10) 'Trusted production CLI baseline must contain all ten commands.'
- $baselineFiles+=@(Get-ChildItem (Join-Path $FixtureRoot 'baseline-cli') -Recurse -File | ForEach-Object {@{path=$_.FullName;hash=(Get-FileHash $_.FullName -Algorithm SHA256).Hash}})
+ $baselineRoots+=@(Invoke-TrustedCliBaseline $trustedOptions (Join-Path $FixtureRoot 'baseline-cli'))
+ $baselineSnapshot=New-TrustedBaselineSnapshot $baselineRoots
  Invoke-CredentialFreeSelectedPowerShell "$scripts/Invoke-SelectedCSharpTests.ps1" (SelectedOptions 'selected-success')
  Assert-SelectedResults 'selected-success';Assert-PreparedProfileProof $proof;Assert-BaselineFiles
  $success=Get-Content (Join-Path $FixtureRoot 'selected-success/test-source-evidence.json') -Raw | ConvertFrom-Json
@@ -120,11 +115,23 @@ try{
   }finally{Remove-Item Env:WSS_FIXTURE_MUTATION_PATH -ErrorAction SilentlyContinue;[IO.File]::WriteAllBytes($case.path,$original)}
   Assert-PreparedProfileProof $proof;Assert-BaselineFiles
  }
+ # The child can add an evidence file without altering existing hashes. The parent
+ # inventory guard must reject it even when the selected test runner succeeds.
+ $added=Join-Path $baseline 'selected-added-evidence.json'
+ try{
+  $env:WSS_FIXTURE_MUTATION_PATH=$added
+  Invoke-CredentialFreeSelectedPowerShell "$scripts/Invoke-SelectedCSharpTests.ps1" (SelectedOptions 'reject-baseline-addition')
+  Assert-SelectedResults 'reject-baseline-addition'
+  $rejected=$false
+  try{Assert-BaselineFiles}catch{if($_.Exception.Message -notlike '*baseline inventory/content*'){throw};$rejected=$true}
+  Require $rejected 'Parent accepted selected-added baseline evidence.'
+ }finally{Remove-Item Env:WSS_FIXTURE_MUTATION_PATH -ErrorAction SilentlyContinue;if(Test-Path -LiteralPath $added){Remove-Item -LiteralPath $added}}
+ Assert-BaselineFiles
  foreach($name in $names){Require ([Environment]::GetEnvironmentVariable($name) -ceq 'synthetic-parent-only') 'Child modified parent credential fixture.'}
  Assert-TestBundleCheckout $state.product_root $state.product_sha
  Assert-TestBundleCheckout $state.test_root $state.test_sha
  Assert-TestBundleCheckout $state.integration_root $state.integration_sha
  Assert-TestBundleCheckout $state.baseline_test_root $state.product_sha
  Require (@(Get-ChildItem $FixtureRoot -Recurse -Filter evidence.json | Where-Object FullName -match '[/\\]selection[/\\]').Count -eq 0) 'Synthetic fixture emitted generic selection evidence.'
- @{schema='wss-synthetic-selected-runtime-result/v1';acceptance=$false;product_sha=$state.product_sha;test_sha=$state.test_sha;test_seed_sha=$state.test_seed_sha;mandatory_stages='16+16';mandatory_cli=10;selected_only_test=$true;baseline_mutation_rejected=$true;payload_mutation_rejected=$true;credential_isolation=$true;passed=$true} | ConvertTo-Json | Set-Content (Join-Path $FixtureRoot 'synthetic-result.json')
+ @{schema='wss-synthetic-selected-runtime-result/v1';acceptance=$false;product_sha=$state.product_sha;test_sha=$state.test_sha;test_seed_sha=$state.test_seed_sha;mandatory_stages='16+16';mandatory_cli=10;selected_only_test=$true;baseline_mutation_rejected=$true;baseline_addition_rejected=$true;payload_mutation_rejected=$true;credential_isolation=$true;passed=$true} | ConvertTo-Json | Set-Content (Join-Path $FixtureRoot 'synthetic-result.json')
 }finally{foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$prior[$name])}}
