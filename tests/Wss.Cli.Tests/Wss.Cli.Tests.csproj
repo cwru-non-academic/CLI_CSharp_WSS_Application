@@ -7,6 +7,7 @@
     <!-- The test SDK owns the entry point; production Main is compiled only to test its dispatcher. -->
     <NoWarn>$(NoWarn);CS8892</NoWarn>
     <WssIntegrationRoot Condition="'$(WssIntegrationRoot)' == ''">$(MSBuildProjectDirectory)/../../SubModules/HFI_WSS_Csharp_Implementation</WssIntegrationRoot>
+    <WssArtifactDir Condition="'$(WSS_ARTIFACT_DIR)' != ''">$(WSS_ARTIFACT_DIR)</WssArtifactDir>
     <WssArtifactDir Condition="'$(WssArtifactDir)' == ''">$(WssIntegrationRoot)/lib</WssArtifactDir>
   </PropertyGroup>
   <ItemGroup>

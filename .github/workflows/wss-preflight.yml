@@ -319,18 +319,13 @@ jobs:
             }
           }
 
-      - name: Run shared Integration conformance scenarios
+      - name: Run both shared Integration conformance stages
         shell: pwsh
-        run: >-
-          dotnet test
-          SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/Wss.CSharpImplementation.Tests.csproj
-          -c Release
-          --no-build
-          --no-restore
-          -p:TreatWarningsAsErrors=true
-          "-p:WSS_ARTIFACT_DIR=$env:WSS_ARTIFACT_DIR"
-          "-p:WSS_BLE_ARTIFACT_DIR=$env:WSS_BLE_ARTIFACT_DIR"
-          --filter FullyQualifiedName~StimulationControllerConformanceTests
+        run: ./SubModules/HFI_WSS_Csharp_Implementation/.github/scripts/Invoke-WssBehavioralConformance.ps1
+
+      - name: Run production CLI analog and modeled command matrix
+        shell: pwsh
+        run: ./.github/scripts/Invoke-CliCommandConformance.ps1
 
   platform-compatibility:
     name: CLI platform compatibility (${{ matrix.label }})
