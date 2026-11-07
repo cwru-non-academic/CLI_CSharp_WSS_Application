@@ -517,16 +517,27 @@ internal static class Program
     /// <summary>Prints command help.</summary>
     private static void PrintCommandHelp()
     {
-        Console.WriteLine("Commands:");
-        Console.WriteLine("  help                Show this help text.");
-        Console.WriteLine("  start               Broadcast StartStim.");
-        Console.WriteLine("  stop                Broadcast StopStim.");
-        Console.WriteLine("  stim <finger> <v>  Stim with model/params layer (normalized magnitude).");
-        Console.WriteLine("  analog <finger> <pw> [amp] [ipi]  Send direct analog request.");
-        Console.WriteLine("  reload-core         Reload the core config JSON.");
-        Console.WriteLine("  reload-params [p]   Reload params JSON (optionally from path).");
-        Console.WriteLine("  save-params         Persist params JSON.");
-        Console.WriteLine("  status              Print Ready/Started/mode state.");
-        Console.WriteLine("  quit|exit           Terminate the program.");
+        Console.WriteLine("Commands at the > prompt (<...> required; [...] optional):");
+        Console.WriteLine("  help                 Show this command reference.");
+        Console.WriteLine("  status               Query Ready/Started/ModeValid/BasicSupported.");
+        Console.WriteLine("  start                Request broadcast start for configured devices.");
+        Console.WriteLine("  stop                 Request broadcast stop (not channel-specific).");
+        Console.WriteLine("  stim <finger|chN> <magnitude>  Apply active model and channel parameters.");
+        Console.WriteLine("    Intended input: finite 0.0..1.0, not mA. Example: stim ch1 1.0");
+        Console.WriteLine("  analog <finger|chN> <pw> [amp] [ipi]  Direct values; bypass model/params.");
+        Console.WriteLine("    Integers: pw in us, amp in mA domain (default 3), ipi in ms (default 10).");
+        Console.WriteLine("    Example: analog ch1 50 1 10. Omitted amp/ipi: analog ch1 50");
+        Console.WriteLine("  reload-core          Reload active Core JSON through host reset; retain model/params.");
+        Console.WriteLine("  reload-params [path]  Reload all default JSONs, a directory profile, or one params file.");
+        Console.WriteLine("    An explicit params file uses startup-default Core/model files, not siblings.");
+        Console.WriteLine("  save-params          Write active params JSON to its current host file.");
+        Console.WriteLine("  quit|exit            Leave the console and clean up the controller.");
+        Console.WriteLine("Aliases: thumb=ch1, index=ch2, middle=ch3, ring=ch4, pinky/little=ch5.");
+        Console.WriteLine("Use channels available in your configuration. Setup is asynchronous.");
+        Console.WriteLine("Examples are for simulation with --test and a disposable config copy.");
+        Console.WriteLine("Values depend on firmware/calibration; requests do not prove physical output.");
+        Console.WriteLine("See README Interactive commands for input limits, paths and examples.");
+        Console.WriteLine("Analog: invalid optional amp/ipi text uses defaults 3/10; enter valid integers.");
+        Console.WriteLine("Reload paths cannot contain spaces; quoting is not supported.");
     }
 }
