@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsTestProject>true</IsTestProject>
+    <!-- The test SDK owns the entry point; production Main is compiled only to test its dispatcher. -->
+    <NoWarn>$(NoWarn);CS8892</NoWarn>
+    <WssIntegrationRoot Condition="'$(WssIntegrationRoot)' == ''">$(MSBuildProjectDirectory)/../../SubModules/HFI_WSS_Csharp_Implementation</WssIntegrationRoot>
+    <WssArtifactDir Condition="'$(WSS_ARTIFACT_DIR)' != ''">$(WSS_ARTIFACT_DIR)</WssArtifactDir>
+    <WssArtifactDir Condition="'$(WssArtifactDir)' == ''">$(WssIntegrationRoot)/lib</WssArtifactDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="NUnit" Version="3.14.0" />
+    <PackageReference Include="NUnit3TestAdapter" Version="4.6.0" />
+    <ProjectReference Include="$(WssIntegrationRoot)/src/Wss.CSharpImplementation.csproj" />
+    <Reference Include="WSS_Core_Interface"><HintPath>$(WssArtifactDir)/WSS_Core_Interface.dll</HintPath></Reference>
+    <Reference Include="WSS.Transport.Serial"><HintPath>$(WssArtifactDir)/WSS.Transport.Serial.dll</HintPath></Reference>
+    <Reference Include="WSS.Transport.BLE"><HintPath>$(WssArtifactDir)/WSS.Transport.BLE.dll</HintPath></Reference>
+    <Compile Include="../../src/Program.cs" Link="ProductionProgram.cs" />
+  </ItemGroup>
+</Project>
