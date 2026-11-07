@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: cwru-non-academic/CSharp_WSS_Integration_Lib
-          ref: cea1c1484a36477dbfc26f63c56acf5626599ecf
+          ref: e820e4589c75724b667547cb12858204e830a5e9
           path: .validation-tools
           fetch-depth: 0
           persist-credentials: false
