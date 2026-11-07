@@ -1,0 +1,125 @@
+name: Synthetic CLI selected runtime proof
+on:
+  pull_request:
+    branches: [dev, main]
+    paths: ['.github/scripts/**', 'tools/CSharpProfiles/**', 'tools/SelectedRuntimeFixtures/**', '.github/workflows/selected-runtime-fixtures.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify-input:
+    name: Authenticate synthetic CLI inputs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Create existing-scope Integration read token
+        id: integration-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.WSS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.WSS_GITHUB_APP_PRIVATE_KEY }}
+          owner: cwru-non-academic
+          repositories: CSharp_WSS_Integration_Lib
+          permission-contents: read
+      - name: Check out reviewed modern Integration fixture
+        uses: actions/checkout@v4
+        with:
+          repository: cwru-non-academic/CSharp_WSS_Integration_Lib
+          ref: 2d58507e812a097a26d59b3199c1533ab083da78
+          path: integration-source
+          fetch-depth: 0
+          token: ${{ steps.integration-token.outputs.token }}
+          persist-credentials: false
+      - name: Create existing-scope producer read token
+        id: producer-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.WSS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.WSS_GITHUB_APP_PRIVATE_KEY }}
+          owner: cwru-non-academic
+          repositories: WSSCore
+          permission-contents: read
+          permission-actions: read
+      - name: Authenticate package and export immutable source without credentials
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.producer-token.outputs.token }}
+        run: |
+          $ErrorActionPreference='Stop'
+          $c=(Get-Content integration-source/lib/wss-candidate.json -Raw | ConvertFrom-Json).candidate
+          ./integration-source/.github/scripts/Resolve-WssRelease.ps1 -ProducerRepository $c.repository -RunId $c.run_id -ExpectedCommit $c.commit -ArchiveName $c.archive -ExpectedSha256 $c.sha256 -OutputRoot "$env:RUNNER_TEMP/synthetic-verified-input"
+          $sha=(& git -C integration-source rev-parse HEAD).Trim()
+          if($LASTEXITCODE -ne 0 -or $sha -cnotmatch '^[a-f0-9]{40}$'){throw 'Invalid integration source identity'}
+          & git -C integration-source bundle create "$env:RUNNER_TEMP/synthetic-verified-input/integration.bundle" HEAD
+          if($LASTEXITCODE -ne 0){throw 'Immutable Integration bundle failed'}
+          @{repository='cwru-non-academic/CSharp_WSS_Integration_Lib';commit=$sha} | ConvertTo-Json | Set-Content "$env:RUNNER_TEMP/synthetic-verified-input/integration-source.json"
+      - name: Publish verified inputs only
+        uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-cli-verified-input
+          path: |
+            ${{ runner.temp }}/synthetic-verified-input/candidate.json
+            ${{ runner.temp }}/synthetic-verified-input/extracted/WSS-Universal/**
+            ${{ runner.temp }}/synthetic-verified-input/integration.bundle
+            ${{ runner.temp }}/synthetic-verified-input/integration-source.json
+          if-no-files-found: error
+  synthetic-runtime:
+    needs: verify-input
+    name: Synthetic CLI runtime (${{ matrix.os }}, ${{ matrix.bundle }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        bundle: [dev-v1, main-v1]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check out immutable selected CLI source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.bundle == 'main-v1' && 'f64382677f18d5a3d871e4889ac0b6c3f597ed58' || '5dabf075b60aa67239f38a5dbdbfaaa3c215425e' }}
+          path: .fixture-test-source
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+      - name: Receive verified source and package without App credentials
+        uses: actions/download-artifact@v4
+        with:
+          name: synthetic-cli-verified-input
+          path: ${{ runner.temp }}/synthetic-verified-input
+      - name: Prepare distinct immutable CLI and test roots
+        shell: pwsh
+        run: >-
+          ./tools/SelectedRuntimeFixtures/Invoke-HostedSelectedRuntime.ps1
+          -Stage Prepare -FixtureRoot "${{ runner.temp }}/synthetic-selected-runtime"
+          -TestSeedRoot "${{ github.workspace }}/.fixture-test-source"
+          -VerifiedInputRoot "${{ runner.temp }}/synthetic-verified-input"
+      - name: Bind verified modern profile to immutable Integration
+        shell: pwsh
+        run: >-
+          ./.github/scripts/Prepare-CSharpProfile.ps1
+          -IntegrationRoot "$env:WSS_FIXTURE_INTEGRATION"
+          -PayloadRoot "$env:WSS_FIXTURE_PAYLOAD"
+          -WorkRoot "$env:WSS_FIXTURE_ROOT/profile"
+          -OutputRoot "$env:WSS_FIXTURE_ROOT/baseline-output"
+          -VerifiedReleaseRoot "${{ runner.temp }}/synthetic-verified-input"
+          -SelectionEnabledCampaign
+      - name: Run trusted baselines and isolated selected mutation fixtures
+        shell: pwsh
+        run: ./tools/SelectedRuntimeFixtures/Invoke-HostedSelectedRuntime.ps1 -Stage Run -FixtureRoot "$env:WSS_FIXTURE_ROOT"
+      - name: Retain synthetic-only diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-cli-runtime-${{ matrix.os }}-${{ matrix.bundle }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/synthetic-selected-runtime/synthetic-result.json
+            ${{ runner.temp }}/synthetic-selected-runtime/**/conformance-stages.json
+            ${{ runner.temp }}/synthetic-selected-runtime/**/*.trx
+          if-no-files-found: warn
