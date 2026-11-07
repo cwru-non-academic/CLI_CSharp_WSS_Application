@@ -1,0 +1,4 @@
+<Project>
+  <!-- Reuse the existing app-command test setup while preserving its exact ten-case inventory. -->
+  <Import Project="../Wss.Cli.Tests/Wss.Cli.Tests.csproj" />
+</Project>

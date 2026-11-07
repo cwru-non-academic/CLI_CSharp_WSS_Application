@@ -221,6 +221,42 @@ jobs:
         shell: pwsh
         run: ./.github/scripts/Invoke-CliCommandConformance.ps1
 
+      - name: Run additional production CLI reload boundaries
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./.github/scripts/tests/ReloadBoundaryWorkflow.Tests.ps1
+          . ./.github/scripts/CSharpProfilesBootstrap.ps1
+          Assert-CSharpProfileBootstrap
+          . ./tools/CSharpProfiles/Profile.ps1
+          if (!$env:WSS_PROFILE_EVIDENCE) { throw 'Verified profile preparation is required.' }
+          $state = Get-Content -LiteralPath $env:WSS_PROFILE_EVIDENCE -Raw | ConvertFrom-Json
+          $profile = Resolve-WssReviewedProfile $state.payload_root $state.profile.producer
+          if ($profile.profile -cne $state.profile.profile -or $profile.core_dll_sha256 -cne $state.profile.core_dll_sha256) { throw 'Reload profile differs from verified preparation.' }
+          $results = Join-Path $env:RUNNER_TEMP 'cli-reload-boundaries'
+          New-Item -ItemType Directory -Force $results | Out-Null
+          switch -CaseSensitive ($profile.profile) {
+            'legacy-v1' {
+              'Not applicable: legitimate legacy profile; this is not modern reload acceptance.' | Tee-Object "$results/legacy-not-applicable.log"
+            }
+            'layered-v1' {
+              dotnet test tests/Wss.Cli.Reload.Tests/Wss.Cli.Reload.Tests.csproj -c Release -p:TreatWarningsAsErrors=true -p:ImportDirectoryBuildProps=false -p:ImportDirectoryBuildTargets=false "-p:WSS_ARTIFACT_DIR=$($state.payload_root)" "-p:WSS_BLE_ARTIFACT_DIR=$($state.payload_root)" --logger 'trx;LogFileName=reload.trx' --results-directory $results
+              if ($LASTEXITCODE -ne 0) { throw 'Additional CLI reload boundaries failed.' }
+              [xml]$trx = Get-Content "$results/reload.trx" -Raw
+              $expected = @('AllJsonReloadWithoutCoreChangeAppliesModelAndDefaultPaWithoutReconnect', 'DirectoryFileAndParameterlessCommandsUseStartupDefaultsAndRetireOldStack', 'CoreOnlyCommandRebuildsEvenUnchangedAndRetainsAppliedModelAndCalibration', 'CoreCommandOnInactiveControllerDoesNotInitializeOrReadInvalidCore')
+              $actual = @($trx.TestRun.Results.UnitTestResult)
+              if ($actual.Count -ne 4 -or @(Compare-Object $expected @($actual.testName) -CaseSensitive).Count -ne 0 -or @($actual | Where-Object outcome -cne 'Passed').Count -ne 0) { throw 'Missing/duplicated/skipped/failed reload boundary tests.' }
+            }
+            default { throw 'Unknown reload capability profile.' }
+          }
+      - name: Retain additional CLI reload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-reload-boundaries
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/cli-reload-boundaries/
+
       - name: Run shared Integration conformance scenarios
         shell: pwsh
         run: ./.github/scripts/Invoke-ProfileBehavior.ps1
