@@ -126,12 +126,31 @@ jobs:
             Remove-Item -LiteralPath $outputPath -Recurse -Force -ErrorAction SilentlyContinue
           }
 
+      - name: Create profile producer read token
+        id: profile-core-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.WSS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.WSS_GITHUB_APP_PRIVATE_KEY }}
+          owner: cwru-non-academic
+          repositories: WSSCore
+          permission-contents: read
+          permission-actions: read
+      - name: Prepare immutable profile test project
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.profile-core-token.outputs.token }}
+        run: >-
+          ./.github/scripts/Prepare-CSharpProfile.ps1
+          -IntegrationRoot SubModules/HFI_WSS_Csharp_Implementation
+          -WorkRoot "${{ runner.temp }}/wss-profile"
+
       - name: Restore shared conformance projects
         shell: pwsh
         run: |
           dotnet restore CLI_CSharp_WSS_Application.sln
           if ($LASTEXITCODE -ne 0) { throw 'CLI restore failed.' }
-          dotnet restore 'SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/Wss.CSharpImplementation.Tests.csproj'
+          dotnet restore "$env:WSS_PROFILE_PROJECT" -p:ImportDirectoryBuildProps=false -p:ImportDirectoryBuildTargets=false
           if ($LASTEXITCODE -ne 0) { throw 'Integration conformance test restore failed.' }
 
       - name: Build shared conformance projects
@@ -139,7 +158,7 @@ jobs:
         run: |
           dotnet build CLI_CSharp_WSS_Application.sln -c Release --no-restore -p:TreatWarningsAsErrors=true
           if ($LASTEXITCODE -ne 0) { throw 'CLI build failed.' }
-          dotnet build 'SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/Wss.CSharpImplementation.Tests.csproj' -c Release --no-restore -p:TreatWarningsAsErrors=true
+          dotnet build "$env:WSS_PROFILE_PROJECT" -p:ImportDirectoryBuildProps=false -p:ImportDirectoryBuildTargets=false -c Release --no-restore -p:TreatWarningsAsErrors=true
           if ($LASTEXITCODE -ne 0) { throw 'Integration conformance test build failed.' }
 
       - name: Run Test transport smoke checks
@@ -165,16 +184,13 @@ jobs:
             }
           }
 
+      - name: Run production CLI command profile
+        shell: pwsh
+        run: ./.github/scripts/Invoke-CliCommandConformance.ps1
+
       - name: Run shared Integration conformance scenarios
         shell: pwsh
-        run: >-
-          dotnet test
-          SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/Wss.CSharpImplementation.Tests.csproj
-          -c Release
-          --no-build
-          --no-restore
-          -p:TreatWarningsAsErrors=true
-          --filter FullyQualifiedName~StimulationControllerConformanceTests
+        run: ./.github/scripts/Invoke-ProfileBehavior.ps1
 
   platform-compatibility:
     name: CLI platform compatibility (${{ matrix.label }})
@@ -258,12 +274,31 @@ jobs:
             Remove-Item -LiteralPath $outputPath -Recurse -Force -ErrorAction SilentlyContinue
           }
 
+      - name: Create profile producer read token
+        id: profile-core-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.WSS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.WSS_GITHUB_APP_PRIVATE_KEY }}
+          owner: cwru-non-academic
+          repositories: WSSCore
+          permission-contents: read
+          permission-actions: read
+      - name: Prepare immutable profile test project
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.profile-core-token.outputs.token }}
+        run: >-
+          ./.github/scripts/Prepare-CSharpProfile.ps1
+          -IntegrationRoot SubModules/HFI_WSS_Csharp_Implementation
+          -WorkRoot "${{ runner.temp }}/wss-profile"
+
       - name: Restore committed state
         shell: pwsh
         run: |
           dotnet restore CLI_CSharp_WSS_Application.sln
           if ($LASTEXITCODE -ne 0) { throw 'CLI restore failed.' }
-          dotnet restore 'SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/Wss.CSharpImplementation.Tests.csproj'
+          dotnet restore "$env:WSS_PROFILE_PROJECT" -p:ImportDirectoryBuildProps=false -p:ImportDirectoryBuildTargets=false
           if ($LASTEXITCODE -ne 0) { throw 'Integration platform test restore failed.' }
 
       - name: Build committed state
@@ -271,7 +306,7 @@ jobs:
         run: |
           dotnet build CLI_CSharp_WSS_Application.sln -c Release --no-restore -p:TreatWarningsAsErrors=true
           if ($LASTEXITCODE -ne 0) { throw 'CLI build failed.' }
-          dotnet build 'SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/Wss.CSharpImplementation.Tests.csproj' -c Release --no-restore -p:TreatWarningsAsErrors=true
+          dotnet build "$env:WSS_PROFILE_PROJECT" -p:ImportDirectoryBuildProps=false -p:ImportDirectoryBuildTargets=false -c Release --no-restore -p:TreatWarningsAsErrors=true
           if ($LASTEXITCODE -ne 0) { throw 'Integration platform test build failed.' }
 
       - name: Verify committed universal build and publish propagation
@@ -298,7 +333,7 @@ jobs:
         shell: pwsh
         run: >-
           dotnet test
-          SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/Wss.CSharpImplementation.Tests.csproj
+          "$env:WSS_PROFILE_PROJECT"
           -c Release
           --no-build
           --no-restore
@@ -402,12 +437,31 @@ jobs:
             Remove-Item -LiteralPath $outputPath -Recurse -Force -ErrorAction SilentlyContinue
           }
 
+      - name: Create profile producer read token
+        id: profile-core-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.WSS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.WSS_GITHUB_APP_PRIVATE_KEY }}
+          owner: cwru-non-academic
+          repositories: WSSCore
+          permission-contents: read
+          permission-actions: read
+      - name: Prepare immutable profile test project
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.profile-core-token.outputs.token }}
+        run: >-
+          ./.github/scripts/Prepare-CSharpProfile.ps1
+          -IntegrationRoot SubModules/HFI_WSS_Csharp_Implementation
+          -WorkRoot "${{ runner.temp }}/wss-profile"
+
       - name: Restore committed state
         shell: pwsh
         run: |
           dotnet restore CLI_CSharp_WSS_Application.sln
           if ($LASTEXITCODE -ne 0) { throw 'CLI restore failed.' }
-          dotnet restore 'SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/Wss.CSharpImplementation.Tests.csproj'
+          dotnet restore "$env:WSS_PROFILE_PROJECT" -p:ImportDirectoryBuildProps=false -p:ImportDirectoryBuildTargets=false
           if ($LASTEXITCODE -ne 0) { throw 'Integration platform test restore failed.' }
 
       - name: Build committed state
@@ -415,7 +469,7 @@ jobs:
         run: |
           dotnet build CLI_CSharp_WSS_Application.sln -c Release --no-restore -p:TreatWarningsAsErrors=true
           if ($LASTEXITCODE -ne 0) { throw 'CLI build failed.' }
-          dotnet build 'SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/Wss.CSharpImplementation.Tests.csproj' -c Release --no-restore -p:TreatWarningsAsErrors=true
+          dotnet build "$env:WSS_PROFILE_PROJECT" -p:ImportDirectoryBuildProps=false -p:ImportDirectoryBuildTargets=false -c Release --no-restore -p:TreatWarningsAsErrors=true
           if ($LASTEXITCODE -ne 0) { throw 'Integration platform test build failed.' }
 
       - name: Verify committed universal build and publish propagation
@@ -441,7 +495,7 @@ jobs:
       - name: Run platform-dependent Integration tests
         shell: pwsh
         run: |
-          & dotnet test SubModules/HFI_WSS_Csharp_Implementation/tests/Wss.CSharpImplementation.Tests/Wss.CSharpImplementation.Tests.csproj -c Release --no-build --no-restore -p:TreatWarningsAsErrors=true --filter "FullyQualifiedName~SerialRuntimeSelectionTests|FullyQualifiedName~BleBackendLoadingTests" --logger 'console;verbosity=detailed' --logger 'trx;LogFileName=macos-platform.trx' --results-directory "$env:RUNNER_TEMP/macos-results" -- RunConfiguration.TargetPlatform=${{ matrix.test_platform }} | Tee-Object -FilePath "$env:RUNNER_TEMP/macos-platform.log"
+          & dotnet test "$env:WSS_PROFILE_PROJECT" -c Release --no-build --no-restore -p:TreatWarningsAsErrors=true --filter "FullyQualifiedName~SerialRuntimeSelectionTests|FullyQualifiedName~BleBackendLoadingTests" --logger 'console;verbosity=detailed' --logger 'trx;LogFileName=macos-platform.trx' --results-directory "$env:RUNNER_TEMP/macos-results" -- RunConfiguration.TargetPlatform=${{ matrix.test_platform }} | Tee-Object -FilePath "$env:RUNNER_TEMP/macos-platform.log"
           if ($LASTEXITCODE -ne 0) { throw 'Canonical platform tests failed.' }
 
       - name: Record canonical packaged BLE result before any synthetic fixture
