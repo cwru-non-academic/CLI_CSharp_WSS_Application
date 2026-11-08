@@ -14,7 +14,7 @@ $required = @(
     "'legacy-v1' {", "'layered-v1' {",
     'this is not modern reload acceptance.',
     'default { throw ''Unknown reload capability profile.'' }',
-    'dotnet test tests/Wss.Cli.Reload.Tests/Wss.Cli.Reload.Tests.csproj',
+    'Invoke-CompiledCSharpTests -Proof $reloadProof -ResultsDirectory $results -TrxFileName ''reload.trx''',
     'if ($LASTEXITCODE -ne 0) { throw',
     '$actual.Count -ne 4',
     'Compare-Object $expected @($actual.testName) -CaseSensitive',
@@ -25,7 +25,7 @@ function Assert-ReloadStep([string]$Text) {
         if (!$Text.Contains($needle)) { throw "Missing reload invocation/profile guard: $needle" }
     }
     if ($Text -match 'continue-on-error:|(?m)^        if:') { throw 'Reload suite may not be bypassed by step conditions.' }
-    if ($Text.IndexOf("'layered-v1' {") -ge $Text.IndexOf('dotnet test tests/Wss.Cli.Reload.Tests')) { throw 'Runtime discovery must be inside the modern branch.' }
+    if ($Text.IndexOf("'layered-v1' {") -ge $Text.IndexOf('Invoke-CompiledCSharpTests -Proof $reloadProof')) { throw 'Runtime discovery must be inside the modern branch.' }
 }
 Assert-ReloadStep $body
 $count = 1
