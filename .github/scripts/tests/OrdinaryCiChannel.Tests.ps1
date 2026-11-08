@@ -407,6 +407,12 @@ function Assert-OrdinaryWorkflow([string]$Text, [string]$Workflow) {
         env:
           WSS_CI_CHANNEL: dev
 '@
+    # Expected source fixtures follow the same LF representation as the workflow.
+    $resolver = $resolver.Replace("`r`n", "`n")
+    $ordinary = $ordinary.Replace("`r`n", "`n")
+    $aggregate = $aggregate.Replace("`r`n", "`n")
+    $guard = $guard.Replace("`r`n", "`n")
+    $fixture = $fixture.Replace("`r`n", "`n")
     if (!$text.Contains("jobs:`n$resolver`n")) { throw 'Channel resolver must remain the first complete job.' }
     $jobText = ($text -split "jobs:`n", 2)[1]
     $jobs = [regex]::Matches($jobText, '(?ms)^  (?<name>[a-zA-Z0-9_-]+):\n(?<body>.*?)(?=^  [a-zA-Z0-9_-]+:\n|\z)')
