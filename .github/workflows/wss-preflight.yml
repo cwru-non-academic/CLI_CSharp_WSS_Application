@@ -541,10 +541,10 @@ jobs:
       - name: Verify complete universal build and publish propagation
         shell: pwsh
         run: |
-          ./SubModules/HFI_WSS_Csharp_Implementation/.github/scripts/Verify-WssOutput.ps1 -ArtifactRoot $env:WSS_ARTIFACT_DIR -OutputRoot 'src/bin/Release/net9.0'
+          ./.github/scripts/Verify-WssOutput.ps1 -ArtifactRoot $env:WSS_ARTIFACT_DIR -OutputRoot 'src/bin/Release/net9.0' -ProjectPath 'src/CLI_CSharp_WSS_Application.csproj' -ProjectAssetsFile 'src/obj/project.assets.json'
           dotnet publish src/CLI_CSharp_WSS_Application.csproj -c Release --no-restore -p:TreatWarningsAsErrors=true "-p:WSS_ARTIFACT_DIR=$env:WSS_ARTIFACT_DIR" "-p:WSS_BLE_ARTIFACT_DIR=$env:WSS_BLE_ARTIFACT_DIR" -o "$env:RUNNER_TEMP/cli-publish"
           if ($LASTEXITCODE -ne 0) { throw 'CLI publish failed.' }
-          ./SubModules/HFI_WSS_Csharp_Implementation/.github/scripts/Verify-WssOutput.ps1 -ArtifactRoot $env:WSS_ARTIFACT_DIR -OutputRoot "$env:RUNNER_TEMP/cli-publish"
+          ./.github/scripts/Verify-WssOutput.ps1 -ArtifactRoot $env:WSS_ARTIFACT_DIR -OutputRoot "$env:RUNNER_TEMP/cli-publish" -ProjectPath 'src/CLI_CSharp_WSS_Application.csproj' -ProjectAssetsFile 'src/obj/project.assets.json'
 
       - name: Run platform runtime smoke checks
         shell: pwsh
@@ -773,10 +773,10 @@ jobs:
       - name: Verify complete universal build and publish propagation
         shell: pwsh
         run: |
-          ./SubModules/HFI_WSS_Csharp_Implementation/.github/scripts/Verify-WssOutput.ps1 -ArtifactRoot $env:WSS_ARTIFACT_DIR -OutputRoot 'src/bin/Release/net9.0'
+          ./.github/scripts/Verify-WssOutput.ps1 -ArtifactRoot $env:WSS_ARTIFACT_DIR -OutputRoot 'src/bin/Release/net9.0' -ProjectPath 'src/CLI_CSharp_WSS_Application.csproj' -ProjectAssetsFile 'src/obj/project.assets.json'
           dotnet publish src/CLI_CSharp_WSS_Application.csproj -c Release --no-restore -p:TreatWarningsAsErrors=true "-p:WSS_ARTIFACT_DIR=$env:WSS_ARTIFACT_DIR" "-p:WSS_BLE_ARTIFACT_DIR=$env:WSS_BLE_ARTIFACT_DIR" -o "$env:RUNNER_TEMP/cli-publish"
           if ($LASTEXITCODE -ne 0) { throw 'CLI publish failed.' }
-          ./SubModules/HFI_WSS_Csharp_Implementation/.github/scripts/Verify-WssOutput.ps1 -ArtifactRoot $env:WSS_ARTIFACT_DIR -OutputRoot "$env:RUNNER_TEMP/cli-publish"
+          ./.github/scripts/Verify-WssOutput.ps1 -ArtifactRoot $env:WSS_ARTIFACT_DIR -OutputRoot "$env:RUNNER_TEMP/cli-publish" -ProjectPath 'src/CLI_CSharp_WSS_Application.csproj' -ProjectAssetsFile 'src/obj/project.assets.json'
 
       - name: Run platform runtime smoke checks
         shell: pwsh
