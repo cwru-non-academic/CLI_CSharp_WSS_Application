@@ -26,7 +26,7 @@ jobs:
       PLAN_ID: ${{ inputs.plan_id }}
       WSS_RECEIPT_ENGINE_SHA: 45d571bef78b1cee9d6497e20448bed7d353644c
       WSS_RECEIPT_CORE_SHA: 3eb48da437841fb705c4e984c839838722e77baf
-      WSS_RECEIPT_VALIDATOR_SHA: 3c0f211c54720033e0e091e536656a2712406d4b
+      WSS_RECEIPT_VALIDATOR_SHA: 1a0898ba60be421d78805a2e48becbb6ef4b84d7
     steps:
       - name: Require static caller eligibility before credentials
         shell: pwsh
@@ -55,7 +55,7 @@ jobs:
         if: ${{ true }}
         with:
           repository: cwru-non-academic/CSharp_WSS_Integration_Lib
-          ref: 3c0f211c54720033e0e091e536656a2712406d4b
+          ref: 1a0898ba60be421d78805a2e48becbb6ef4b84d7
           path: validator
           persist-credentials: false
       - uses: actions/checkout@v4
