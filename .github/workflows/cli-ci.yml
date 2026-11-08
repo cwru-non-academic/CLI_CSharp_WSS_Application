@@ -385,10 +385,10 @@ jobs:
         shell: pwsh
         run: |
           $integration = 'SubModules/HFI_WSS_Csharp_Implementation'
-          & "$integration/.github/scripts/Verify-WssOutput.ps1" -ArtifactRoot "$integration/lib" -OutputRoot 'src/bin/Release/net9.0'
+          ./.github/scripts/Verify-WssOutput.ps1 -ArtifactRoot "$integration/lib" -OutputRoot 'src/bin/Release/net9.0' -ProjectPath 'src/CLI_CSharp_WSS_Application.csproj' -ProjectAssetsFile 'src/obj/project.assets.json'
           dotnet publish src/CLI_CSharp_WSS_Application.csproj -c Release --no-restore -p:TreatWarningsAsErrors=true -o "$env:RUNNER_TEMP/cli-publish"
           if ($LASTEXITCODE -ne 0) { throw 'Committed CLI publish failed.' }
-          & "$integration/.github/scripts/Verify-WssOutput.ps1" -ArtifactRoot "$integration/lib" -OutputRoot "$env:RUNNER_TEMP/cli-publish"
+          ./.github/scripts/Verify-WssOutput.ps1 -ArtifactRoot "$integration/lib" -OutputRoot "$env:RUNNER_TEMP/cli-publish" -ProjectPath 'src/CLI_CSharp_WSS_Application.csproj' -ProjectAssetsFile 'src/obj/project.assets.json'
 
       - name: Run platform runtime smoke checks
         shell: pwsh
@@ -551,10 +551,10 @@ jobs:
         shell: pwsh
         run: |
           $integration = 'SubModules/HFI_WSS_Csharp_Implementation'
-          & "$integration/.github/scripts/Verify-WssOutput.ps1" -ArtifactRoot "$integration/lib" -OutputRoot 'src/bin/Release/net9.0'
+          ./.github/scripts/Verify-WssOutput.ps1 -ArtifactRoot "$integration/lib" -OutputRoot 'src/bin/Release/net9.0' -ProjectPath 'src/CLI_CSharp_WSS_Application.csproj' -ProjectAssetsFile 'src/obj/project.assets.json'
           dotnet publish src/CLI_CSharp_WSS_Application.csproj -c Release --no-restore -p:TreatWarningsAsErrors=true -o "$env:RUNNER_TEMP/cli-publish"
           if ($LASTEXITCODE -ne 0) { throw 'Committed CLI publish failed.' }
-          & "$integration/.github/scripts/Verify-WssOutput.ps1" -ArtifactRoot "$integration/lib" -OutputRoot "$env:RUNNER_TEMP/cli-publish"
+          ./.github/scripts/Verify-WssOutput.ps1 -ArtifactRoot "$integration/lib" -OutputRoot "$env:RUNNER_TEMP/cli-publish" -ProjectPath 'src/CLI_CSharp_WSS_Application.csproj' -ProjectAssetsFile 'src/obj/project.assets.json'
 
       - name: Run platform runtime smoke checks
         shell: pwsh

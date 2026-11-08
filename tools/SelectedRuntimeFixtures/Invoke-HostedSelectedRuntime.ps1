@@ -82,7 +82,7 @@ try{
  foreach($name in $names){$prior[$name]=[Environment]::GetEnvironmentVariable($name);[Environment]::SetEnvironmentVariable($name,'synthetic-parent-only')}
  Invoke-CredentialFreeSelectedPowerShell "$scripts/Invoke-ProfileFullTests.ps1" @{EvidencePath=$profilePath;ResultsDirectory=$baseline}
  Assert-PreparedProfileProof $proof
- & (Join-Path $state.integration_root '.github/scripts/Verify-WssOutput.ps1') -ArtifactRoot $state.payload_root -OutputRoot (Join-Path $proof.state.output_root 'Release/net9.0')
+ & "$scripts/Verify-WssOutput.ps1" -ArtifactRoot $state.payload_root -OutputRoot (Join-Path $proof.state.output_root 'Release/net9.0') -ProjectPath $proof.state.project -ProjectAssetsFile (Join-Path (Split-Path -Parent $proof.state.project) 'obj/project.assets.json')
  $baselineRoots=@($proof.state.output_root,$baseline)
  $baselineSnapshot=New-TrustedBaselineSnapshot $baselineRoots
  function Assert-BaselineFiles {Assert-TrustedBaselineSnapshot $baselineSnapshot}
