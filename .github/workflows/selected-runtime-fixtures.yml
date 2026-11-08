@@ -27,7 +27,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: cwru-non-academic/CSharp_WSS_Integration_Lib
-          ref: d4d6854e711a9683d5bcf95a2dcca2eb10ce8a84
+          ref: b456fd578fca91f20312410ad49219b5b5d83d9a
           path: integration-source
           fetch-depth: 0
           token: ${{ steps.integration-token.outputs.token }}
