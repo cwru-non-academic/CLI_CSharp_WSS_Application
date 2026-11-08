@@ -92,6 +92,156 @@ dotnet run --project src/CLI_CSharp_WSS_Application.csproj -- --transport=ble --
 - `--ble-smoke`: use alone to construct and dispose the platform BLE facade twice without scanning, connecting, reading configuration or writing to a device. Native ABI checks remain in the Integration platform tests.
 - `--help`: print usage information
 
+## Interactive commands
+
+Enter these commands at the application's `>` prompt after startup; they are
+separate from startup options such as `--test`. Command names and finger/channel
+aliases are case-insensitive. In the syntax below, `<...>` is required and
+`[...]` is optional; do not type the brackets.
+
+| Command | What it does and inputs | Example at the prompt |
+| --- | --- | --- |
+| `help` | Show interactive command syntax, units and defaults. | `help` |
+| `status` | Query controller state and available API support. See the state explanation below. | `status` |
+| `start` | Request a broadcast start for the configured devices; takes no channel or magnitude. | `start` |
+| `stop` | Request a broadcast stop; takes no channel argument. | `stop` |
+| `stim <finger\|chN> <magnitude>` | Update one logical channel using the active model and stimulation parameters. Intended magnitude input is a finite number from `0.0` to `1.0`. | `stim ch1 1.0` |
+| `analog <finger\|chN> <pw> [amp] [ipi]` | Update one channel directly, bypassing model/parameter mapping. Pulse width is in microseconds, amplitude is in the mA domain (mapped to device scale), and inter-pulse interval is in milliseconds. Use integers; omitted `amp` is `3`, omitted `ipi` is `10`. | `analog ch1 50 1 10` |
+| `reload-core` | Reload the active `stimConfig.json` through the host reset path, retaining current calibration/model values. Reconstructs Core, including receiver addressing. | `reload-core` |
+| `reload-params [path]` | Reload all three startup-default JSON files. A directory selects all three standard filenames. An explicit file overrides the calibration path only; Core/model files are reread from startup defaults. | `reload-params ./Config/stimParams.json` |
+| `save-params` | Write active stimulation parameters to their current JSON file. This is host-side persistence, not a device configuration save. | `save-params` |
+| `quit` or `exit` | Leave the console and clean up the controller. | `quit` |
+
+### Channels, values and state
+
+`chN` selects a 1-based logical channel. Finger aliases map to `thumb` = `ch1`,
+`index` = `ch2`, `middle` = `ch3`, `ring` = `ch4`, and `pinky`/`little` = `ch5`.
+Use a channel available in your configuration; recognizing a name does not make
+that channel available. For example, a one-device configuration has three
+logical channels, so `ring` and `pinky` are outside its range.
+
+`stim ch1 1.0` supplies normalized input **1.0**, not 1 mA. The active P/PD model
+and per-channel `stimParams.json` settings determine the resulting pulse width
+and amplitude. `stim thumb 0.25` supplies 0.25 to the same channel. The intended
+input interval is `0.0` through `1.0`; this is not a claim that the command parser
+rejects every value outside that interval. Model mapping can change the output,
+so even input `0` is not a substitute for the broadcast `stop` command.
+
+`analog ch1 50` uses pulse width 50, amplitude 3 and IPI 10. To choose an IPI,
+supply the amplitude too: `analog ch1 50 1 20`. These are syntax examples, not
+recommended settings for a person or device. Direct analog values do not use
+the normalized calibration mapping. The CLI does not impose a universal
+calibrated operating range; use settings appropriate to your firmware, device
+and calibration. A successfully parsed request does not establish valid physical
+output. Stimulation commands update runtime values; `save-params` does not turn
+an analog request into new calibration settings.
+
+Setup continues asynchronously. `Ready` describes the Core state in which a
+start can be accepted, while `Started` describes started/streaming state;
+`Ready` need not remain true while streaming. `ModeValid` reports model-mode
+support, and `BasicSupported` reports availability of the optional Basic API.
+These flags and printed request messages do not prove physical stimulation.
+
+### Parsing and paths
+
+Magnitude uses invariant-culture floating-point syntax: use `1.0`, not a
+locale-specific decimal comma. Analog values are signed 32-bit integers
+(`50`, not `50.0`). Missing required `stim`/`analog` arguments print usage.
+Invalid magnitude or pulse-width text prints `Command failed`. **Invalid optional
+amplitude or IPI text falls back to 3 or 10 respectively**, just as omission does;
+enter explicit valid integers. Extra arguments are ignored by current handlers.
+Magnitude parsing does not explicitly reject all non-finite values.
+
+Interactive input is split on spaces. `reload-params` accepts a single path
+token: quotes do **not** enable spaces in paths. For example, use
+`reload-params C:/WSS/Config/stimParams.json`; select a location without spaces.
+
+For default, directory and explicit-file selection, reconstruction and retained
+values, see [Coordinated configuration reload](#coordinated-configuration-reload).
+
+### Practice without hardware
+
+After building the app, create a temporary copy of `Config` and start
+the simulated transport. From the repository root in PowerShell:
+
+```powershell
+$practiceConfig = Join-Path ([System.IO.Path]::GetTempPath()) ("wss-practice-" + [guid]::NewGuid())
+Copy-Item -LiteralPath ./Config -Destination $practiceConfig -Recurse
+dotnet run --project src/CLI_CSharp_WSS_Application.csproj -- --test --config="$practiceConfig"
+```
+
+`--conformance` runs finite diagnostics and exits; it does not open this prompt.
+
+In that simulated session, try these commands one at a time. Inspect `status`
+and let setup progress before requesting a start. After `start`, wait for
+`Started` before the stimulation examples. These commands demonstrate syntax;
+the configured model and parameters still control the simulated values.
+
+```text
+help
+status
+start
+status
+stim ch1 1.0
+stim thumb 0.25
+analog ch1 50 1 10
+stop
+reload-core
+reload-params
+save-params
+quit
+```
+
+The copy isolates configuration writes, not just the log file. Serial/BLE startup
+selects live transports; keep `--test` for this exercise. A simulated session
+does not validate physical communication or output.
+
+## Coordinated configuration reload
+
+These commands use the coordinated reload support in the wrapper pinned by this
+MAIN checkout. Older checkouts must be checked against their own wrapper
+source and Core payload; updating Core alone does not add the host reset behavior.
+
+Enter `reload-core`, `reload-params [path]`, or `save-params` at the interactive
+prompt. Do not type the brackets. The commands call `LoadCoreConfigFile()`,
+`LoadParamsJson()` / `LoadParamsJson(path)`, and `SaveParamsJson()` respectively.
+
+- `reload-params` rereads all three startup-default files: `stimConfig.json`,
+  `stimParams.json`, and `modelConfig.json`. It returns to those defaults even
+  after selecting another profile.
+- `reload-params ./Config/profile` selects all three standard filenames in that
+  directory.
+- `reload-params ./Config/customParams.json` selects that calibration file with
+  the startup-default Core and model files, **not sibling files** next to the
+  selected calibration file. All three JSON files are still read and validated.
+- `reload-core` reads the active Core file, retains currently applied in-memory
+  calibration/model values and paths (including unsaved edits), and reconstructs
+  Core through the host reset path, including its receiver address map. It
+  reconstructs even if Core values are unchanged. Before initialization this
+  Core reset is a no-op.
+- `save-params` writes active stimulation parameters to the selected calibration
+  file. It does not save device configuration or persist the Core/model files.
+
+The startup defaults come from the application's resolved configuration directory
+(`Config/` in the app repository unless overridden at startup). Startup paths
+remain anchored even if the process working directory changes. Relative explicit
+reload paths are resolved against the process working directory.
+
+Reload stages and validates files before changing the active stack. Any effective
+Core configuration change uses the existing reset path: stop ticking, dispose the
+old stack (Core zeros output and disconnects), construct the validated replacement,
+and resume initialization/ticking. Unchanged Core permits calibration/model
+updates without reconnecting. A reset does not replay previous stimulation values.
+`reload-core` retains applied calibration/model values; `reload-params` rereads them.
+Use `status` to check asynchronous setup and wait for `Started` before sending new
+stimulation commands after reconstruction. A printed reload message does not
+establish device readiness or physical output.
+
+Invalid JSON leaves the active stack unchanged. Cleanup or construction failure
+can leave the controller unavailable; inspect the reported error rather than
+assuming the replacement is ready. Use a disposable configuration copy with the
+simulated transport when practicing reloads or `save-params`.
+
 ## Config behavior
 
 By default, the CLI resolves the repository root explicitly and uses the app repo's `Config/` directory from there. Conformance mode instead creates and removes a temporary deterministic configuration from the shared WSS stimulation fixture.
@@ -203,3 +353,28 @@ normal CI and is manually merged, prepare the CLI source-plus-final-gitlink PR, 
 authorization, and require normal CLI CI and review before manual merge. This one-time manual
 initiation leaves the permanent Integration bot/lib-only dispatch trigger unchanged. Subsequent
 Integration merges return to that automatic dispatch and ordinary gitlink-only CLI promotion.
+
+## Independent selected test bundle
+
+The additional selected-test runner keeps product checkout SHAs and the selected
+payload fixed. Core must authenticate the frozen test selection before invoking
+it. A syntactically valid selection ID is only a local binding, not approval.
+
+For C#, invoke the trusted `.github/scripts/Invoke-SelectedCSharpTests.ps1` with
+`Role`, `ProductRoot`, `ProductSha`, `PayloadRoot`, a new `WorkRoot`, and the complete
+`TestRoot`, `TestSha`, `TestRepository`, `TestSelectionId` tuple. The CLI also takes
+its unchanged `IntegrationRoot` and `IntegrationSha`. The selected checkout must
+contain `tests/test-contract.json` and be clean. The trusted generated project
+compiles selected C# test files against explicit product sources; selected
+projects, build overrides and release validators are never executed.
+
+This suite is additional to the existing mandatory CI gates. It does not change
+product readiness, package provenance, native-platform requirements, release
+approval or receipt verification. The wrapper retains the reviewed canonical
+assertions and both 16-case stages; the CLI retains its ten command cases.
+`test-source-evidence.json` records the selected source, contract hash and product
+identities only after source and payload postchecks pass. Workflow selection and
+campaign evidence adoption must land separately before repository variables are
+advertised as active.
+Selected C# runs require fresh product checkouts without prior bin/obj outputs. This prevents stale NuGet intermediate imports from affecting the build; generated outputs from this run are allowed only during postchecks.
+The product project is built from a trusted git archive at the declared integration SHA in the new work directory. Original product checkouts remain pristine for Core evidence verification; staged source hashes are rechecked after execution.
