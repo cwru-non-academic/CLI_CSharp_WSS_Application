@@ -88,7 +88,7 @@ try{
  $baselineAssets=Join-Path (Split-Path -Parent $proof.state.project) 'obj/project.assets.json'
  $baselineRestoreProof=New-WssRestoredAssetsProof -ProjectAssetsFile $baselineAssets -ProjectPath $proof.state.project
  & "$scripts/Verify-WssOutput.ps1" -ArtifactRoot $state.payload_root -OutputRoot (Join-Path $proof.state.output_root 'Release/net9.0') -ProjectPath $proof.state.project -ProjectAssetsFile (Join-Path (Split-Path -Parent $proof.state.project) 'obj/project.assets.json') -RestoreProof $baselineRestoreProof
- $baselineRoots=@($proof.state.output_root,$baseline)
+ $baselineRoots=@($proof.state.output_root,$baseline,(Join-Path $scripts 'wss-ci/restored-assets'),(Join-Path $scripts 'Verify-WssOutput.ps1'))
  $cliRestoreProof=$null
  $baselineSnapshot=New-TrustedBaselineSnapshot $baselineRoots
  function Assert-BaselineFiles {
