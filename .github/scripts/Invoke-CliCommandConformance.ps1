@@ -22,11 +22,23 @@ if($profile.profile -ceq 'legacy-v1') {
 }
 
 $project=Join-Path $PSScriptRoot '../../tests/Wss.Cli.Tests/Wss.Cli.Tests.csproj'
-$argsList=@('test',$project,'-c','Release','-p:TreatWarningsAsErrors=true','-p:ImportDirectoryBuildProps=false','-p:ImportDirectoryBuildTargets=false','--logger','trx;LogFileName=commands.trx','--results-directory',$ResultsDirectory)
-if ($env:WSS_ARTIFACT_DIR) { $argsList+="-p:WSS_ARTIFACT_DIR=$env:WSS_ARTIFACT_DIR" }
-if ($env:WSS_BLE_ARTIFACT_DIR) { $argsList+="-p:WSS_BLE_ARTIFACT_DIR=$env:WSS_BLE_ARTIFACT_DIR" }
-& dotnet @argsList
-if ($LASTEXITCODE -ne 0) { throw 'Production CLI command conformance failed.' }
+. "$PSScriptRoot/wss-ci/restored-assets/RestoredAssets.ps1"
+. "$PSScriptRoot/wss-ci/compiled-tests/CompiledCSharpTests.ps1"
+$properties=@('-p:DisablePackageAssetsCache=true','-p:TreatWarningsAsErrors=true','-p:ImportDirectoryBuildProps=false','-p:ImportDirectoryBuildTargets=false',"-p:WSS_ARTIFACT_DIR=$($state.payload_root)","-p:WSS_BLE_ARTIFACT_DIR=$($state.payload_root)")
+& dotnet restore $project @properties
+if($LASTEXITCODE -ne 0){throw 'CLI command restore failed.'}
+$assets=Join-Path (Split-Path $project) 'obj/project.assets.json'
+$restoreProof=New-WssRestoredAssetsProof -ProjectAssetsFile $assets -ProjectPath $project
+& dotnet build $project -c Release --no-restore @properties
+if($LASTEXITCODE -ne 0){throw 'CLI command build failed.'}
+$output=Join-Path (Split-Path $project) 'bin/Release/net9.0'
+& "$PSScriptRoot/Verify-WssOutput.ps1" -ArtifactRoot $state.payload_root -OutputRoot $output -ProjectPath $project -ProjectAssetsFile $assets -RestoreProof $restoreProof
+$restoreSnapshot=New-TrustedBaselineSnapshot @($project,$assets,$restoreProof.NeutralAssetPath,(Join-Path $PSScriptRoot 'wss-ci/restored-assets'),(Join-Path $PSScriptRoot 'Verify-WssOutput.ps1'))
+$compiledProof=New-CompiledCSharpTestProof -OutputRoot $output -AssemblyName 'Wss.Cli.Tests.dll'
+Invoke-CompiledCSharpTests -Proof $compiledProof -ResultsDirectory $ResultsDirectory -TrxFileName 'commands.trx'
+Assert-TrustedBaselineSnapshot $restoreSnapshot
+Assert-WssRestoredAssetsProof -Proof $restoreProof -ProjectAssetsFile $assets -ProjectPath $project
+& "$PSScriptRoot/Verify-WssOutput.ps1" -ArtifactRoot $state.payload_root -OutputRoot $output -ProjectPath $project -ProjectAssetsFile $assets -RestoreProof $restoreProof
 [xml]$trx=Get-Content (Join-Path $ResultsDirectory 'commands.trx') -Raw
 $expected=@('analog.multichannel-isolation','analog.multidevice-isolation')
 foreach ($model in @('p','pd')) { foreach ($mode in @('pw','pa')) { foreach ($stage in @('single','multi')) { $expected+="modeled.$model.$mode.$stage" } } }

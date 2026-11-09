@@ -74,6 +74,7 @@ $scripts=Join-Path $AdapterRoot '.github/scripts'
 . "$scripts/CSharpTestSource.ps1"
 . "$scripts/PreparedProfileProof.ps1"
 . "$scripts/TrustedBaseline.ps1"
+. "$scripts/wss-ci/restored-assets/RestoredAssets.ps1"
 $profilePath=Join-Path $FixtureRoot 'profile/profile.json'
 $proof=New-PreparedProfileProof $profilePath $state.payload_root $state.integration_root $state.integration_sha $true
 $baseline=Join-Path $FixtureRoot 'baseline-results'
@@ -82,10 +83,23 @@ try{
  foreach($name in $names){$prior[$name]=[Environment]::GetEnvironmentVariable($name);[Environment]::SetEnvironmentVariable($name,'synthetic-parent-only')}
  Invoke-CredentialFreeSelectedPowerShell "$scripts/Invoke-ProfileFullTests.ps1" @{EvidencePath=$profilePath;ResultsDirectory=$baseline}
  Assert-PreparedProfileProof $proof
- & (Join-Path $state.integration_root '.github/scripts/Verify-WssOutput.ps1') -ArtifactRoot $state.payload_root -OutputRoot (Join-Path $proof.state.output_root 'Release/net9.0')
- $baselineRoots=@($proof.state.output_root,$baseline)
+ # The immutable baseline has built its project. Preserve its restore identity
+ # in this parent before any separately selected source executes.
+ $baselineAssets=Join-Path (Split-Path -Parent $proof.state.project) 'obj/project.assets.json'
+ $baselineRestoreProof=New-WssRestoredAssetsProof -ProjectAssetsFile $baselineAssets -ProjectPath $proof.state.project
+ & "$scripts/Verify-WssOutput.ps1" -ArtifactRoot $state.payload_root -OutputRoot (Join-Path $proof.state.output_root 'Release/net9.0') -ProjectPath $proof.state.project -ProjectAssetsFile (Join-Path (Split-Path -Parent $proof.state.project) 'obj/project.assets.json') -RestoreProof $baselineRestoreProof
+ $baselineRoots=@($proof.state.output_root,$baseline,(Join-Path $scripts 'wss-ci/restored-assets'),(Join-Path $scripts 'Verify-WssOutput.ps1'))
+ $cliRestoreProof=$null
  $baselineSnapshot=New-TrustedBaselineSnapshot $baselineRoots
- function Assert-BaselineFiles {Assert-TrustedBaselineSnapshot $baselineSnapshot}
+ function Assert-BaselineFiles {
+  Assert-TrustedBaselineSnapshot $baselineSnapshot
+  Assert-WssRestoredAssetsProof -Proof $baselineRestoreProof -ProjectAssetsFile $baselineAssets -ProjectPath $proof.state.project
+  & "$scripts/Verify-WssOutput.ps1" -ArtifactRoot $state.payload_root -OutputRoot (Join-Path $proof.state.output_root 'Release/net9.0') -ProjectPath $proof.state.project -ProjectAssetsFile $baselineAssets -RestoreProof $baselineRestoreProof
+  if($null -ne $cliRestoreProof){
+   Assert-WssRestoredAssetsProof -Proof $cliRestoreProof -ProjectAssetsFile $cliBaselineAssets -ProjectPath $cliBaselineProject
+   & "$scripts/Verify-WssOutput.ps1" -ArtifactRoot $state.payload_root -OutputRoot (Join-Path $FixtureRoot 'baseline-cli/bin/Release/net9.0') -ProjectPath $cliBaselineProject -ProjectAssetsFile $cliBaselineAssets -RestoreProof $cliRestoreProof
+  }
+ }
  function SelectedOptions([string]$Name){@{Role='cli';IntegrationRoot=$state.integration_root;IntegrationSha=$state.integration_sha;ProductRoot=$state.product_root;ProductSha=$state.product_sha;PayloadRoot=$state.payload_root;WorkRoot=(Join-Path $FixtureRoot $Name);TestRoot=$state.test_root;TestSha=$state.test_sha;TestRepository='cwru-non-academic/CLI_CSharp_WSS_Application';TestSelectionId=$state.selection_id;ProfileEvidencePath=$profilePath}}
  function Assert-SelectedResults([string]$Name){
   $root=Join-Path $FixtureRoot $Name
@@ -100,13 +114,18 @@ try{
  # not either separately selected bundle or its poisoned configuration.
  $trustedOptions=SelectedOptions 'baseline-cli'
  $baselineRoots+=@(Invoke-TrustedCliBaseline $trustedOptions (Join-Path $FixtureRoot 'baseline-cli'))
+ $cliBaselineProject=Join-Path $FixtureRoot 'baseline-cli/SelectedTests.csproj'
+ $cliBaselineAssets=Join-Path $FixtureRoot 'baseline-cli/obj/project.assets.json'
+ $cliRestoreProof=New-WssRestoredAssetsProof -ProjectAssetsFile $cliBaselineAssets -ProjectPath $cliBaselineProject
  $baselineSnapshot=New-TrustedBaselineSnapshot $baselineRoots
+ Assert-BaselineFiles
  Invoke-CredentialFreeSelectedPowerShell "$scripts/Invoke-SelectedCSharpTests.ps1" (SelectedOptions 'selected-success')
  Assert-SelectedResults 'selected-success';Assert-PreparedProfileProof $proof;Assert-BaselineFiles
  $success=Get-Content (Join-Path $FixtureRoot 'selected-success/test-source-evidence.json') -Raw | ConvertFrom-Json
  Require ($success.product_sha -ceq $state.product_sha -and $success.test_sha -ceq $state.test_sha -and $success.product_root -cne $success.test_root) 'Product/test identities became coupled.'
  foreach($case in @(@{name='reject-baseline-mutation';path=$proof.state.project;reason='*proof/source changed*'},@{name='reject-payload-mutation';path=(Join-Path $state.payload_root 'wss-candidate.json');reason='*payload changed*'})){
   $original=[IO.File]::ReadAllBytes($case.path)
+  $originalLastWriteTimeUtc=[IO.File]::GetLastWriteTimeUtc($case.path)
   try{
    $env:WSS_FIXTURE_MUTATION_PATH=$case.path;$rejected=$false
    try{Invoke-CredentialFreeSelectedPowerShell "$scripts/Invoke-SelectedCSharpTests.ps1" (SelectedOptions $case.name)}catch{$rejected=$true}
@@ -115,7 +134,7 @@ try{
    $parentRejected=$false
    try{Assert-PreparedProfileProof $proof}catch{if($_.Exception.Message -notlike $case.reason){throw};$parentRejected=$true}
    Require $parentRejected 'Parent failed to detect selected mutation.'
-  }finally{Remove-Item Env:WSS_FIXTURE_MUTATION_PATH -ErrorAction SilentlyContinue;[IO.File]::WriteAllBytes($case.path,$original)}
+  }finally{Remove-Item Env:WSS_FIXTURE_MUTATION_PATH -ErrorAction SilentlyContinue;[IO.File]::WriteAllBytes($case.path,$original);[IO.File]::SetLastWriteTimeUtc($case.path,$originalLastWriteTimeUtc)}
   Assert-PreparedProfileProof $proof;Assert-BaselineFiles
  }
  # The child can add an evidence file without altering existing hashes. The parent
