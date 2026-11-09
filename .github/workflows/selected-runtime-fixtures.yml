@@ -23,6 +23,15 @@ jobs:
           owner: cwru-non-academic
           repositories: CSharp_WSS_Integration_Lib
           permission-contents: read
+      # Resolver tools advance independently of the historical product fixture below.
+      - name: Check out reviewed Integration resolver tools
+        uses: actions/checkout@v4
+        with:
+          repository: cwru-non-academic/CSharp_WSS_Integration_Lib
+          ref: 7cc53e90e3da25d1ba12fbe7799349b7a7a7ba29
+          path: integration-tools
+          token: ${{ steps.integration-token.outputs.token }}
+          persist-credentials: false
       - name: Check out reviewed modern Integration fixture
         uses: actions/checkout@v4
         with:
@@ -49,7 +58,7 @@ jobs:
         run: |
           $ErrorActionPreference='Stop'
           $c=[pscustomobject]@{repository='cwru-non-academic/WSSCore';run_id=42362522777;commit='bb52ac3f3507635a7d434657ed631ffe186db694';archive='WSS-Universal-ci.zip';sha256='c3d6f8e50c8b9ca7bc13b21fa62cade8818046ce3a29aa02828a1907d083051e'}
-          ./integration-source/.github/scripts/Resolve-WssRelease.ps1 -ProducerRepository $c.repository -RunId $c.run_id -ExpectedCommit $c.commit -ArchiveName $c.archive -ExpectedSha256 $c.sha256 -OutputRoot "$env:RUNNER_TEMP/synthetic-verified-input"
+          ./integration-tools/.github/scripts/Resolve-WssRelease.ps1 -ProducerRepository $c.repository -RunId $c.run_id -ExpectedCommit $c.commit -ArchiveName $c.archive -ExpectedSha256 $c.sha256 -OutputRoot "$env:RUNNER_TEMP/synthetic-verified-input"
           if ((Get-Content "$env:RUNNER_TEMP/synthetic-verified-input/candidate.json" -Raw | ConvertFrom-Json).artifact_id -ne 13570163970) { throw 'Unexpected authenticated collision fixture artifact.' }
           $sha=(& git -C integration-source rev-parse HEAD).Trim()
           if($LASTEXITCODE -ne 0 -or $sha -cnotmatch '^[a-f0-9]{40}$'){throw 'Invalid integration source identity'}
