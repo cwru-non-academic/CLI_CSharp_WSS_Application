@@ -160,7 +160,7 @@ jobs:
           name: wss-candidate-provenance
           path: ${{ runner.temp }}/wss-release/candidate.json
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 90
 
   general-conformance:
     name: CLI general conformance
@@ -843,6 +843,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 90
           name: wss-macos-cli-preflight-${{ matrix.arch }}-a${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/macos-evidence/*.json
