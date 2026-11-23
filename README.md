@@ -21,7 +21,7 @@ The integration library lives in the `HFI_WSS_Csharp_Implementation` git submodu
 Install Git and the .NET 9 SDK. Run `dotnet --list-sdks` to check that a 9.x SDK is installed. Build from the repository root. The build needs access to NuGet.
 
 ```powershell
-git clone --recurse-submodules https://github.com/cwru-non-academic/CLI_CSharp_WSS_Application.git
+git clone --branch dev --recurse-submodules https://github.com/cwru-non-academic/CLI_CSharp_WSS_Application.git
 cd CLI_CSharp_WSS_Application
 dotnet build CLI_CSharp_WSS_Application.sln
 dotnet run --project src/CLI_CSharp_WSS_Application.csproj -- --conformance
@@ -31,7 +31,7 @@ If you already cloned without submodules, run `git submodule update --init --rec
 
 ### Prepare the one-channel bench profile
 
-Follow the [hardware overview](https://cwru-non-academic.github.io/WSS_Documentation/hardwareDocs/wsshardware.html) for the physical setup and the [bench verification handoff](https://github.com/cwru-non-academic/WSS_Documentation/blob/main/apiDocs/conceptual/start-here-using-an-application.md#bench-verification) for the approved profile and measurement procedure. Use a bench setup with no person connected.
+Follow the [hardware overview](https://cwru-non-academic.github.io/WSS_Documentation/hardwareDocs/wsshardware.html) for the physical setup and the [bench verification handoff](https://github.com/cwru-non-academic/WSS_Documentation/blob/dev/apiDocs/conceptual/start-here-using-an-application.md#bench-verification) for the approved profile and measurement procedure. Use a bench setup with no person connected.
 
 The three JSON files in `Config/` travel together. In `stimConfig.json`, set `maxWSS` to 1 and check that `firmware` and the first `wssTargets` entry match the device. The shipped example uses J03 and first receiver `0x80`. Its normalized pulse-width limits in `stimParams.json` are zero. Use the approved bench calibration for `ch1` and keep the accompanying `modelConfig.json`, which controls how normalized input is mapped.
 
