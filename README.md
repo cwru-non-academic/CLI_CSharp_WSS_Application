@@ -16,65 +16,58 @@ The integration library lives in the `HFI_WSS_Csharp_Implementation` git submodu
 - `Config/`: app-owned runtime configuration
 - `SubModules/HFI_WSS_Csharp_Implementation/`: library submodule
 
-## Clone with submodules
+## First stimulation
 
-Clone the application repo and initialize the library in one step:
+Install Git and the .NET 9 SDK. Run `dotnet --list-sdks` to check that a 9.x SDK is installed. Build from the repository root. The build needs access to NuGet.
 
-```bash
-git clone --recurse-submodules git@github.com:cwru-non-academic/CLI_CSharp_WSS_Application.git
-```
-
-If you already cloned the app repo without submodules:
-
-```bash
-git submodule update --init --recursive
-```
-
-To update the submodule later:
-
-```bash
-git submodule update --init --recursive --remote
-```
-
-## Build
-
-Install the .NET 9 SDK, which is required by the library's cross-platform BLE transport.
-
-```bash
+```powershell
+git clone --branch dev --recurse-submodules https://github.com/cwru-non-academic/CLI_CSharp_WSS_Application.git
+cd CLI_CSharp_WSS_Application
 dotnet build CLI_CSharp_WSS_Application.sln
-```
-
-## Run
-
-```bash
-dotnet run --project src/CLI_CSharp_WSS_Application.csproj -- [options]
-```
-
-Example simulated startup:
-
-```bash
-dotnet run --project src/CLI_CSharp_WSS_Application.csproj -- --test
-```
-
-`--test` is an alias for `--transport=test`.
-
-Run the deterministic, hardware-independent consumer conformance check:
-
-```bash
 dotnet run --project src/CLI_CSharp_WSS_Application.csproj -- --conformance
 ```
 
-Verify that the Serial transport can be loaded and constructed without opening a serial device or requiring hardware:
+If you already cloned without submodules, run `git submodule update --init --recursive` and repeat the build. The simulated check prints `Initialization: PASS` and `Direct analog: PASS`.
 
-```bash
-dotnet run --project src/CLI_CSharp_WSS_Application.csproj -- --serial-smoke
+### Prepare the one-channel bench profile
+
+Follow the [hardware overview](https://cwru-non-academic.github.io/WSS_Documentation/hardwareDocs/wsshardware.html) for the physical setup and the [bench verification handoff](https://github.com/cwru-non-academic/WSS_Documentation/blob/dev/apiDocs/conceptual/start-here-using-an-application.md#bench-verification) for the approved profile and measurement procedure. Use a bench setup with no person connected.
+
+The three JSON files in `Config/` travel together. In `stimConfig.json`, set `maxWSS` to 1 and check that `firmware` and the first `wssTargets` entry match the device. The shipped example uses J03 and first receiver `0x80`. Its normalized pulse-width limits in `stimParams.json` are zero. Use the approved bench calibration for `ch1` and keep the accompanying `modelConfig.json`, which controls how normalized input is mapped.
+
+From the repo root in PowerShell, create a working copy and apply the bench profile to that copy before launching:
+
+```powershell
+$config = Join-Path $PWD.Path 'Config-bench'
+New-Item -ItemType Directory -Path $config -Force | Out-Null
+Copy-Item ./Config/*.json $config
 ```
 
-Connect using a Nordic UART Service-compatible BLE device by name, identifier, or auto-selection:
+### Connect by serial or BLE
 
-```bash
-dotnet run --project src/CLI_CSharp_WSS_Application.csproj -- --transport=ble --ble-auto
+For serial on Windows, find the device under **Device Manager → Ports (COM & LPT)**. On Linux or macOS, use its full `/dev/...` path. See [Linux serial dependencies and permissions](https://github.com/cwru-non-academic/WSSCore#linux-serial-setup) for Linux.
+
+```powershell
+$port = Read-Host 'WSS serial port'
+dotnet run --project src/CLI_CSharp_WSS_Application.csproj -- --transport=serial "--serial=$port" "--config=$config"
 ```
+
+For BLE, enable Bluetooth and use the exact advertised name of the NUS device. Use `--ble-device-id=ID` instead when devices share a name.
+
+```powershell
+$name = Read-Host 'WSS BLE name'
+dotnet run --project src/CLI_CSharp_WSS_Application.csproj -- --transport=ble "--ble-device-name=$name" "--config=$config"
+```
+
+### Send a command, verify output, and stop
+
+1. At the application's `>` prompt, run `status`. Setup is asynchronous. When `Started` is true, continue to the next step. If `Ready` is true and `Started` is false, run `start` and check `status` again until `Started` is true.
+2. Enter `stim ch1 <magnitude>`, replacing `<magnitude>` with the normalized input from your bench profile. Confirm output on the mapped channel using the bench procedure.
+3. Enter `stop` and verify output has ceased. Enter `quit` to exit.
+
+If the app never starts, check the selected device, port access, firmware and receiver address. If it starts but the bench measurement shows no output, check that the loaded calibration and model apply to the channel you are testing.
+
+Use the configuration path, selected transport, and setup messages printed in the terminal to troubleshoot. For an interactive simulated run, see [Practice without hardware](#practice-without-hardware). The `--serial-smoke` option checks serial construction without opening a device.
 
 ## CLI options
 
@@ -271,6 +264,13 @@ The CLI project references the library project directly with a `ProjectReference
 
 - `src/CLI_CSharp_WSS_Application.csproj`
 - `SubModules/HFI_WSS_Csharp_Implementation/src/Wss.CSharpImplementation.csproj`
+
+## Updates for maintainers
+
+After pulling an application update, use `git submodule sync --recursive` and
+`git submodule update --init --recursive` to restore the new committed pin.
+Use `git submodule update --init --recursive --remote` only when preparing a
+deliberate dependency change for review.
 
 ## CI and WSS release compatibility testing
 
